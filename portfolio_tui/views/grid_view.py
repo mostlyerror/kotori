@@ -55,8 +55,8 @@ class GridView(Widget):
             "ORDER BY triggered_at DESC LIMIT 6"
         )
         self._update_table(positions)
-        self._update_regime(regimes)
-        self._update_activity(alerts)
+        await self._update_regime(regimes)
+        await self._update_activity(alerts)
 
     def _update_table(self, positions: list) -> None:
         table = self.query_one("#positions-table", DataTable)
@@ -68,9 +68,9 @@ class GridView(Widget):
             icon = status_icon.get(p["thesis_status"], "—")
             table.add_row(p["symbol"], str(int(p["quantity"])), pct_str, icon)
 
-    def _update_regime(self, regimes: list) -> None:
+    async def _update_regime(self, regimes: list) -> None:
         content = self.query_one("#regime-content")
-        content.remove_children()
+        await content.remove_children()
         seen = set()
         for r in regimes:
             if r["symbol"] in seen:
@@ -78,13 +78,13 @@ class GridView(Widget):
             seen.add(r["symbol"])
             iv_label = {"high": "IVR↑", "normal": "IVR~", "low": "IVR↓"}.get(r["iv_regime"], "")
             earnings = " PreEarnings" if r["earnings_regime"] == "pre_earnings" else ""
-            content.mount(Label(f"{r['symbol']:<6} {r['market_regime']}{earnings} {iv_label}"))
+            await content.mount(Label(f"{r['symbol']:<6} {r['market_regime']}{earnings} {iv_label}"))
 
-    def _update_activity(self, alerts: list) -> None:
+    async def _update_activity(self, alerts: list) -> None:
         content = self.query_one("#activity-content")
-        content.remove_children()
+        await content.remove_children()
         for a in alerts:
-            content.mount(Label(f"{a['symbol'] or '—':<6} {a['message'][:40]}"))
+            await content.mount(Label(f"{a['symbol'] or '—':<6} {a['message'][:40]}"))
 
     def action_open_detail(self) -> None:
         table = self.query_one("#positions-table", DataTable)

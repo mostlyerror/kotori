@@ -64,20 +64,16 @@ class InboxView(Widget):
 
     @work(exclusive=True)
     async def refresh_items(self) -> None:
-        self.items = await db.query(
+        items = await db.query(
             "SELECT * FROM inbox_items WHERE dismissed_at IS NULL "
             "ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'action_required' THEN 1 ELSE 2 END, created_at"
         )
-
-    def watch_items(self, items: list | None) -> None:
-        if items is None:
-            return
-
         container = self.query_one("#inbox-content")
-        container.remove_children()
+        await container.remove_children()
 
         if not items:
-            container.mount(InboxZero())
+            await container.mount(InboxZero())
+            self.items = items
             return
 
         urgent = [i for i in items if i["priority"] == "urgent"]
@@ -86,6 +82,11 @@ class InboxView(Widget):
 
         for header, group in [("URGENT", urgent), ("ACTION REQUIRED", action), ("FOR REVIEW", review)]:
             if group:
-                container.mount(Label(header, classes="section-header"))
+                await container.mount(Label(header, classes="section-header"))
                 for item in group:
-                    container.mount(InboxItemCard(item, id=f"item-{item['id']}"))
+                    await container.mount(InboxItemCard(item))
+
+        self.items = items
+
+    def watch_items(self, items: list | None) -> None:
+        pass

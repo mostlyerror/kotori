@@ -51,14 +51,14 @@ class KanbanLane(Widget):
         yield Label(f"{self.lane_title} (0)", id=f"lane-header-{self.lane_id}", classes="lane-header")
         yield Widget(id=f"lane-cards-{self.lane_id}")
 
-    def update_cards(self, cards: list) -> None:
+    async def update_cards(self, cards: list) -> None:
         self.query_one(f"#lane-header-{self.lane_id}", Label).update(
             f"{self.lane_title} ({len(cards)})"
         )
         container = self.query_one(f"#lane-cards-{self.lane_id}")
-        container.remove_children()
+        await container.remove_children()
         for c in cards:
-            container.mount(KanbanCard(c, id=f"card-{c['id']}"))
+            await container.mount(KanbanCard(c))
 
 
 class KanbanView(Widget):
@@ -98,9 +98,9 @@ class KanbanView(Widget):
             "SELECT id, symbol, realized_pnl FROM ic_positions "
             "WHERE exit_reason IS NOT NULL ORDER BY rowid DESC LIMIT 5"
         )
-        self._update_lanes(positions, open_ics, candidates, closed_ics)
+        await self._update_lanes(positions, open_ics, candidates, closed_ics)
 
-    def _update_lanes(self, positions, open_ics, candidates, closed_ics) -> None:
+    async def _update_lanes(self, positions, open_ics, candidates, closed_ics) -> None:
         watching = [{"id": f"w-{p['symbol']}", "symbol": p["symbol"],
                      "metric": f"{p['unrealized_pnl_pct']:+.1%}",
                      "status": p["status"]} for p in positions]
@@ -114,11 +114,11 @@ class KanbanView(Widget):
                          "metric": f"${ic['realized_pnl']:+.0f}" if ic["realized_pnl"] is not None else "$0",
                          "status": "closed"} for ic in closed_ics]
 
-        self.query_one("#lane-watching", KanbanLane).update_cards(watching)
-        self.query_one("#lane-candidate", KanbanLane).update_cards(candidate_cards)
-        self.query_one("#lane-open", KanbanLane).update_cards(open_cards)
-        self.query_one("#lane-closing", KanbanLane).update_cards([])
-        self.query_one("#lane-closed", KanbanLane).update_cards(closed_cards)
+        await self.query_one("#lane-watching", KanbanLane).update_cards(watching)
+        await self.query_one("#lane-candidate", KanbanLane).update_cards(candidate_cards)
+        await self.query_one("#lane-open", KanbanLane).update_cards(open_cards)
+        await self.query_one("#lane-closing", KanbanLane).update_cards([])
+        await self.query_one("#lane-closed", KanbanLane).update_cards(closed_cards)
 
     async def action_approve_candidate(self) -> None:
         focused = self.app.focused

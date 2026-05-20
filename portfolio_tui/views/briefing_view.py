@@ -58,27 +58,27 @@ class BriefingView(Widget):
             "SELECT symbol, message FROM alerts WHERE acknowledged=0 ORDER BY triggered_at DESC LIMIT 4"
         )
         content = briefing[0]["content"] if briefing else "_No briefing available._"
-        self._update_content(content, positions, alerts)
+        await self._update_content(content, positions, alerts)
 
-    def _update_content(self, content: str, positions: list, alerts: list) -> None:
+    async def _update_content(self, content: str, positions: list, alerts: list) -> None:
         md_id = f"md-{self._period}"
         self.query_one(f"#{md_id}", Markdown).update(content)
 
         pos_container = self.query_one("#sidebar-positions")
-        pos_container.remove_children()
+        await pos_container.remove_children()
         status_icon = {"intact": "●", "weakening": "~", "invalidated": "✗"}
         for p in positions:
             icon = status_icon.get(p["status"], "—")
             pct = p["unrealized_pnl_pct"] * 100
-            pos_container.mount(Label(
+            await pos_container.mount(Label(
                 f"{p['symbol']:<6} ${p['current_price']:>8.2f} {pct:+.1f}% {icon}",
                 classes="position-row"
             ))
 
         alert_container = self.query_one("#sidebar-alerts")
-        alert_container.remove_children()
+        await alert_container.remove_children()
         for a in alerts:
-            alert_container.mount(Label(f"⚡ {a['symbol'] or ''} {a['message'][:30]}"))
+            await alert_container.mount(Label(f"⚡ {a['symbol'] or ''} {a['message'][:30]}"))
 
     def action_show_period(self, period: str) -> None:
         self._period = period
