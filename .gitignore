@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 .trader/
 .worktrees/
+.env
+.env.*
+!.env.example
