@@ -11,12 +11,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
 
-from portfoliod.config import DB_PATH, TRADIER_API_KEY
-from portfoliod.db import get_db, init_db
-from portfoliod.mock_data import seed_mock_data
-from portfoliod.position_sync import sync_positions
-from portfoliod.tradier_client import build_client, get_account_id
-from portfoliod import jobs
+from kotorid.config import DB_PATH, TRADIER_API_KEY
+from kotorid.db import get_db, init_db
+from kotorid.mock_data import seed_mock_data
+from kotorid.position_sync import sync_positions
+from kotorid.tradier_client import build_client, get_account_id
+from kotorid import jobs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -108,8 +108,8 @@ async def run():
 
     scheduler.start()
     log.info(
-        "portfoliod running (TRADIER_ENV=%s)",
-        __import__("portfoliod.config", fromlist=["TRADIER_ENV"]).TRADIER_ENV,
+        "kotorid running (TRADIER_ENV=%s)",
+        __import__("kotorid.config", fromlist=["TRADIER_ENV"]).TRADIER_ENV,
     )
 
     loop = asyncio.get_event_loop()
@@ -119,7 +119,7 @@ async def run():
 
     await stop.wait()
     scheduler.shutdown()
-    log.info("portfoliod stopped")
+    log.info("kotorid stopped")
 
 
 def main():

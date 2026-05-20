@@ -4,7 +4,7 @@ from textual.widget import Widget
 from textual.widgets import Label, Markdown, Static
 from textual.binding import Binding
 from textual import work
-import portfolio_tui.db as db
+import kotori_tui.db as db
 
 
 PRIORITY_ICON = {"urgent": "🔴", "action_required": "🟡", "for_review": "🔵"}

@@ -3,8 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "the-trader"
+name = "kotori"
 version = "0.1.0"
+description = "Kotori (小鳥) — a portfolio companion for options traders running iron condors"
 requires-python = ">=3.13"
 dependencies = [
     "textual>=0.89",
@@ -17,11 +18,11 @@ dependencies = [
 ]
 
 [project.scripts]
-portfoliod = "portfoliod.__main__:main"
-trader = "portfolio_tui.__main__:main"
+kotorid = "kotorid.__main__:main"
+kotori = "kotori_tui.__main__:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["portfoliod", "portfolio_tui"]
+packages = ["kotorid", "kotori_tui"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

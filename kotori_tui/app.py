@@ -1,10 +1,10 @@
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from portfolio_tui.widgets.status_bar import StatusBar
+from kotori_tui.widgets.status_bar import StatusBar
 
 
-class TraderApp(App):
-    TITLE = "The Trader"
+class KotoriApp(App):
+    TITLE = "🐦 kotori"
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
     ]
@@ -14,10 +14,10 @@ class TraderApp(App):
     """
 
     def compose(self) -> ComposeResult:
-        from portfolio_tui.views.briefing_view import BriefingView
+        from kotori_tui.views.briefing_view import BriefingView
         yield BriefingView(id="briefing")
         yield StatusBar()
 
     def open_position_detail(self, symbol: str) -> None:
-        from portfolio_tui.screens.position_detail import PositionDetail
+        from kotori_tui.screens.position_detail import PositionDetail
         self.push_screen(PositionDetail(symbol))

@@ -4,7 +4,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Label, Select
 from textual.widget import Widget
 from textual import work
-import portfolio_tui.db as db
+import kotori_tui.db as db
 
 
 class ThesisEditor(ModalScreen):

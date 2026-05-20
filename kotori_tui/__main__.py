@@ -6,11 +6,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from portfoliod.config import DB_PATH, TRADIER_API_KEY
-from portfoliod.db import get_db, init_db
-from portfoliod.mock_data import seed_mock_data
-from portfoliod.position_sync import sync_positions
-from portfoliod.tradier_client import build_client, get_account_id
+from kotorid.config import DB_PATH, TRADIER_API_KEY
+from kotorid.db import get_db, init_db
+from kotorid.mock_data import seed_mock_data
+from kotorid.position_sync import sync_positions
+from kotorid.tradier_client import build_client, get_account_id
 
 log = logging.getLogger(__name__)
 
@@ -37,8 +37,8 @@ async def ensure_db():
 
 def main():
     asyncio.run(ensure_db())
-    from portfolio_tui.app import TraderApp
-    TraderApp().run()
+    from kotori_tui.app import KotoriApp
+    KotoriApp().run()
 
 
 if __name__ == "__main__":

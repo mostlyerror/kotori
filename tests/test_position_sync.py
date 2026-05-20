@@ -2,9 +2,9 @@
 import httpx
 import pytest
 
-from portfoliod.db import get_db, init_db
-from portfoliod.position_sync import sync_positions
-from portfoliod.tradier_client import build_client
+from kotorid.db import get_db, init_db
+from kotorid.position_sync import sync_positions
+from kotorid.tradier_client import build_client
 
 
 def _make_client(handler):

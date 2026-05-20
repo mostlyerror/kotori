@@ -6,16 +6,16 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
-NAMES=("the-trader" "the-watcher" "the-cockpit" "the-pipeline" "the-briefing-room" "the-inbox")
+NAMES=("kotori" "the-watcher" "the-cockpit" "the-pipeline" "the-briefing-room" "the-inbox")
 TITLES=(
-  "★ The Trader       — Hybrid: Inbox+Grid+Kanban+Briefing. (RECOMMENDED)"
+  "★ 🐦 kotori          — Portfolio companion for iron condor traders. (RECOMMENDED)"
   "The Watcher        — Autonomous daemon, read-only TUI. Trust the machine."
   "The Cockpit        — No daemon, all in-process. Human decides everything."
   "The Pipeline       — Kanban board. Positions flow through IC lifecycle lanes."
   "The Briefing Room  — AI narrative is the interface. Data is secondary."
   "The Inbox          — Alert inbox. Only shows what needs attention."
 )
-ENTRY_POINTS=("trader" "portfolio" "portfolio" "pipeline" "portfolio" "portfolio")
+ENTRY_POINTS=("kotori" "portfolio" "portfolio" "pipeline" "portfolio" "portfolio")
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
@@ -47,7 +47,7 @@ launch() {
   local entry="$2"
   local dir
 
-  if [[ "$name" == "the-trader" ]]; then
+  if [[ "$name" == "kotori" ]]; then
     dir="$ROOT"
   else
     dir="$ROOT/.worktrees/$name"
@@ -71,13 +71,13 @@ launch() {
 while true; do
   clear
   echo ""
-  echo -e "  ${BOLD}Portfolio Tracker — Parallel Explorations${RESET}"
+  echo -e "  ${BOLD}🐦 Kotori — Portfolio Companion${RESET}"
   echo -e "  ${DIM}Pick an approach to try. Deps install automatically on first run.${RESET}"
   echo ""
 
   for i in "${!NAMES[@]}"; do
     local_num=$((i + 1))
-    if [[ "${NAMES[$i]}" == "the-trader" ]]; then
+    if [[ "${NAMES[$i]}" == "kotori" ]]; then
       venv_path="$ROOT/.venv/bin/python"
     else
       venv_path="$ROOT/.worktrees/${NAMES[$i]}/.venv/bin/python"

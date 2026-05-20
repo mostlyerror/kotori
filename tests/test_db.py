@@ -1,6 +1,6 @@
 import pytest
 import aiosqlite
-from portfoliod.db import get_db, init_db
+from kotorid.db import get_db, init_db
 
 
 @pytest.mark.asyncio

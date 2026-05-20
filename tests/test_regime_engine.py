@@ -1,4 +1,4 @@
-from portfoliod.regime_engine import get_vix_regime, get_iv_regime
+from kotorid.regime_engine import get_vix_regime, get_iv_regime
 
 
 def test_vix_normal():

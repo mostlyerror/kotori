@@ -8,8 +8,8 @@ import json
 import httpx
 import pytest
 
-from portfoliod import tradier_client
-from portfoliod.tradier_client import (
+from kotorid import tradier_client
+from kotorid.tradier_client import (
     _as_list,
     build_client,
     get_account_id,

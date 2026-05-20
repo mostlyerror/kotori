@@ -1,6 +1,6 @@
 from pathlib import Path
 import aiosqlite
-from portfoliod.config import DB_PATH
+from kotorid.config import DB_PATH
 
 
 async def query(sql: str, params: tuple = ()) -> list[dict]:

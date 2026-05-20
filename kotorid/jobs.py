@@ -1,9 +1,9 @@
 import logging
 from datetime import datetime, timezone
 import aiosqlite
-from portfoliod.config import DB_PATH
-from portfoliod.db import get_db
-from portfoliod.position_monitor import check_exit_trigger
+from kotorid.config import DB_PATH
+from kotorid.db import get_db
+from kotorid.position_monitor import check_exit_trigger
 
 log = logging.getLogger(__name__)
 

@@ -1,5 +1,5 @@
 import pytest
-from portfoliod.iv_engine import compute_iv_rank, compute_iv_percentile
+from kotorid.iv_engine import compute_iv_rank, compute_iv_percentile
 
 
 def test_iv_rank_mid_range():

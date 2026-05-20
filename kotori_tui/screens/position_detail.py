@@ -4,7 +4,7 @@ from textual.screen import Screen
 from textual.widgets import Label, Static
 from textual.widget import Widget
 from textual import work
-import portfolio_tui.db as db
+import kotori_tui.db as db
 
 
 class PositionDetail(Screen):
@@ -113,7 +113,7 @@ class PositionDetail(Screen):
             notes_section.mount(Label(f"{n['created_at'][:10]}  {n['body']}", classes="notes-entry"))
 
     async def action_add_note(self) -> None:
-        from portfolio_tui.screens.note_input import NoteInput
+        from kotori_tui.screens.note_input import NoteInput
         import asyncio
 
         def save_note(note: str) -> None:
@@ -125,5 +125,5 @@ class PositionDetail(Screen):
         await self.app.push_screen(NoteInput(self.symbol), save_note)
 
     def action_edit_thesis(self) -> None:
-        from portfolio_tui.screens.thesis_editor import ThesisEditor
+        from kotori_tui.screens.thesis_editor import ThesisEditor
         self.app.push_screen(ThesisEditor(self.symbol))

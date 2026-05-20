@@ -1,5 +1,5 @@
 import pytest
-from portfoliod.position_monitor import check_exit_trigger, compute_exit_debit
+from kotorid.position_monitor import check_exit_trigger, compute_exit_debit
 
 def test_profit_target_hit():
     assert check_exit_trigger(entry_credit=1.85, exit_debit=0.92) == "profit_target"

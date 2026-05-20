@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 
-from portfoliod.config import (
+from kotorid.config import (
     TRADIER_ACCOUNT_ID,
     TRADIER_API_KEY,
     TRADIER_BASE,

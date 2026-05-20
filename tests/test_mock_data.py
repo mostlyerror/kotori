@@ -1,6 +1,6 @@
 import pytest
-from portfoliod.db import get_db, init_db
-from portfoliod.mock_data import seed_mock_data
+from kotorid.db import get_db, init_db
+from kotorid.mock_data import seed_mock_data
 
 
 @pytest.mark.asyncio

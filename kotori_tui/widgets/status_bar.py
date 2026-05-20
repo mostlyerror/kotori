@@ -4,7 +4,7 @@ from textual.widget import Widget
 from textual.widgets import Label
 from textual import work
 import os
-import portfolio_tui.db as db
+import kotori_tui.db as db
 
 
 class StatusBar(Widget):

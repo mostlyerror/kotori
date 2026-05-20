@@ -12,7 +12,7 @@ import logging
 import aiosqlite
 import httpx
 
-from portfoliod.tradier_client import (
+from kotorid.tradier_client import (
     get_positions,
     get_quotes,
     parse_occ_symbol,

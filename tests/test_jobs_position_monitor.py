@@ -1,7 +1,7 @@
 import pytest
-from portfoliod.db import get_db, init_db
-from portfoliod.mock_data import seed_mock_data
-from portfoliod.jobs import run_position_monitor
+from kotorid.db import get_db, init_db
+from kotorid.mock_data import seed_mock_data
+from kotorid.jobs import run_position_monitor
 
 @pytest.mark.asyncio
 async def test_position_monitor_no_triggers_on_fresh_data(tmp_path):
