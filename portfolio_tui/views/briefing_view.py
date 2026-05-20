@@ -16,11 +16,10 @@ SECTION_HEADERS = {
 }
 
 
-class InboxCard(Static):
+class InboxCard(Static, can_focus=True):
     def __init__(self, item: dict, **kwargs):
         super().__init__(**kwargs)
         self.item = item
-        self.can_focus = True
         self.add_class(f"prio-{item['priority']}")
 
     def compose(self) -> ComposeResult:
@@ -111,19 +110,27 @@ class BriefingView(Widget):
 
     async def _render_inbox(self, items: list) -> None:
         section = self.query_one("#inbox-section")
+        had_focus = isinstance(self.app.focused, InboxCard)
         await section.remove_children()
 
         if not items:
             await section.mount(Label("✓  Inbox zero — portfolio running autonomously", classes="inbox-zero"))
             return
 
+        first_card: InboxCard | None = None
         for priority in PRIORITY_ORDER:
             group = [i for i in items if i["priority"] == priority]
             if not group:
                 continue
             await section.mount(Label(SECTION_HEADERS[priority], classes="section-header"))
             for item in group:
-                await section.mount(InboxCard(item))
+                card = InboxCard(item)
+                await section.mount(card)
+                if first_card is None:
+                    first_card = card
+
+        if first_card is not None and not had_focus:
+            first_card.focus()
 
     def _render_briefing(self, content: str) -> None:
         self.query_one("#briefing-md", Markdown).update(content)
@@ -140,7 +147,12 @@ class BriefingView(Widget):
 
     def action_open_detail(self) -> None:
         focused = self.app.focused
-        if isinstance(focused, InboxCard):
-            symbol = focused.item.get("symbol")
-            if symbol:
-                self.app.open_position_detail(symbol)
+        if not isinstance(focused, InboxCard):
+            cards = list(self.query(InboxCard))
+            if not cards:
+                return
+            focused = cards[0]
+            focused.focus()
+        symbol = focused.item.get("symbol")
+        if symbol:
+            self.app.open_position_detail(symbol)
