@@ -13,6 +13,7 @@ dependencies = [
     "apscheduler>=3.10",
     "anthropic>=0.30",
     "pytz>=2024.1",
+    "python-dotenv>=1.0",
 ]
 
 [project.scripts]

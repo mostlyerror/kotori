@@ -3,13 +3,19 @@ import logging
 import signal
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
 
-from portfoliod.config import DB_PATH
+from portfoliod.config import DB_PATH, TRADIER_API_KEY
 from portfoliod.db import get_db, init_db
 from portfoliod.mock_data import seed_mock_data
+from portfoliod.position_sync import sync_positions
+from portfoliod.tradier_client import build_client, get_account_id
 from portfoliod import jobs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -17,12 +23,42 @@ log = logging.getLogger(__name__)
 CT = pytz.timezone("America/Chicago")
 
 
-async def run():
+async def ensure_db():
+    """Initialize DB; sync real positions if Tradier creds set, else mock seed."""
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     async with get_db(DB_PATH) as db:
         await init_db(db)
-        await seed_mock_data(db)
+        if TRADIER_API_KEY:
+            try:
+                async with build_client() as client:
+                    account_id = await get_account_id(client)
+                    count = await sync_positions(db, client, account_id)
+                log.info(
+                    "ensure_db: synced %d positions from Tradier (account=%s)",
+                    count,
+                    account_id,
+                )
+            except Exception:
+                log.exception("ensure_db: Tradier sync failed; continuing")
+        else:
+            await seed_mock_data(db)
+            log.info("ensure_db: TRADIER_API_KEY not set — seeded mock data")
         log.info("DB ready at %s", DB_PATH)
+
+
+async def _scheduled_position_sync():
+    """Recurring job: re-sync positions from Tradier."""
+    try:
+        async with get_db(DB_PATH) as db:
+            async with build_client() as client:
+                account_id = await get_account_id(client)
+                await sync_positions(db, client, account_id)
+    except Exception:
+        log.exception("scheduled position_sync failed")
+
+
+async def run():
+    await ensure_db()
 
     scheduler = AsyncIOScheduler(timezone=CT)
 
@@ -60,6 +96,15 @@ async def run():
     )
     # Every 30s — position monitor
     scheduler.add_job(jobs.position_monitor, "interval", seconds=30, id="position_monitor")
+
+    # Every 60s — Tradier position sync (only when API key is configured)
+    if TRADIER_API_KEY:
+        scheduler.add_job(
+            _scheduled_position_sync,
+            "interval",
+            seconds=60,
+            id="position_sync",
+        )
 
     scheduler.start()
     log.info(
