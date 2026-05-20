@@ -1,0 +1,166 @@
+<style>
+  * { box-sizing: border-box; }
+  body { background: #0a0a0a; }
+  .tui { font-family: 'Courier New', monospace; font-size: 11px; color: #d4d4d4; background: #0d0d0d; border: 1px solid #333; border-radius: 4px; overflow: hidden; }
+  .tui-bar { background: #1a1a2e; color: #7aa2f7; padding: 3px 8px; font-size: 10px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; }
+  .tui-tabs { background: #111; border-bottom: 1px solid #333; display: flex; padding: 0 4px; }
+  .tui-tab { padding: 3px 10px; color: #666; font-size: 10px; }
+  .tui-tab.active { color: #7aa2f7; border-bottom: 2px solid #7aa2f7; }
+  .tui-body { display: flex; height: 160px; }
+  .tui-sidebar { width: 38%; border-right: 1px solid #333; padding: 4px; overflow: hidden; }
+  .tui-main { flex: 1; padding: 4px; }
+  .tui-row { display: flex; justify-content: space-between; padding: 2px 4px; font-size: 10px; border-bottom: 1px solid #1a1a1a; }
+  .tui-row:hover { background: #1a1a2e; }
+  .tui-row.header { color: #666; border-bottom: 1px solid #333; }
+  .green { color: #9ece6a; }
+  .red { color: #f7768e; }
+  .yellow { color: #e0af68; }
+  .blue { color: #7aa2f7; }
+  .purple { color: #bb9af7; }
+  .dim { color: #555; }
+  .badge { padding: 1px 4px; border-radius: 2px; font-size: 9px; }
+  .badge-green { background: #1a2e1a; color: #9ece6a; }
+  .badge-red { background: #2e1a1a; color: #f7768e; }
+  .badge-yellow { background: #2e2a1a; color: #e0af68; }
+  .badge-blue { background: #1a1e2e; color: #7aa2f7; }
+  .tui-statusbar { background: #111; border-top: 1px solid #333; padding: 2px 8px; font-size: 9px; color: #555; display: flex; justify-content: space-between; }
+  .tui-split { display: flex; height: 155px; }
+  .tui-left { width: 42%; border-right: 1px solid #333; }
+  .tui-right { flex: 1; display: flex; flex-direction: column; }
+  .tui-right-top { flex: 1; border-bottom: 1px solid #333; padding: 4px; }
+  .tui-right-bottom { height: 50px; padding: 4px; }
+  .tui-grid { display: grid; grid-template-rows: auto 1fr auto; height: 190px; }
+  .tui-summary { display: flex; gap: 2px; padding: 3px 6px; background: #111; border-bottom: 1px solid #333; }
+  .tui-metric { flex: 1; text-align: center; padding: 3px; border: 1px solid #222; border-radius: 2px; }
+  .tui-metric .val { font-size: 11px; }
+  .tui-metric .lbl { font-size: 8px; color: #555; }
+  .tui-panels { display: flex; flex: 1; overflow: hidden; }
+  .tui-panel { flex: 1; border-right: 1px solid #333; padding: 3px; overflow: hidden; }
+  .tui-panel:last-child { border-right: none; }
+  .tui-panel-title { font-size: 9px; color: #555; border-bottom: 1px solid #222; margin-bottom: 3px; padding-bottom: 2px; }
+  .tui-alerts { padding: 2px 6px; background: #0d0d0d; border-top: 1px solid #333; font-size: 9px; height: 30px; overflow: hidden; }
+  .section-label { font-size: 10px; color: #555; margin-bottom: 6px; }
+</style>
+
+<h2>TUI Layout Options</h2>
+<p class="subtitle">Three ways to organize the dashboard — pick the one that feels right for how you trade</p>
+
+<div class="options">
+
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Tab Navigation</h3>
+      <p>Separate tabs for Portfolio, Regime, Alerts, Briefings. Clean and focused — one view at a time.</p>
+      <div class="tui" style="margin-top:8px">
+        <div class="tui-bar"><span>portfoliod ● running</span><span>09:41:22  NAV $84,230</span></div>
+        <div class="tui-tabs">
+          <div class="tui-tab active">Portfolio</div>
+          <div class="tui-tab">Regime</div>
+          <div class="tui-tab">Alerts</div>
+          <div class="tui-tab">Briefings</div>
+          <div class="tui-tab dim">⚙ Config</div>
+        </div>
+        <div style="padding:4px">
+          <div class="tui-row header"><span style="width:60px">Symbol</span><span style="width:40px">Qty</span><span style="width:55px">P&L</span><span style="width:55px">P&L%</span><span>Regime</span><span>Thesis</span></div>
+          <div class="tui-row"><span style="width:60px" class="blue">NVDA</span><span style="width:40px">100</span><span style="width:55px" class="green">+$842</span><span style="width:55px" class="green">+3.2%</span><span><span class="badge badge-yellow">Trend↑</span></span><span class="green">Intact</span></div>
+          <div class="tui-row"><span style="width:60px" class="purple">TSLA IC</span><span style="width:40px">2</span><span style="width:55px" class="green">+$340</span><span style="width:55px" class="green">+68%</span><span><span class="badge badge-red">PreErn</span></span><span class="yellow">Watch</span></div>
+          <div class="tui-row"><span style="width:60px" class="blue">META</span><span style="width:40px">50</span><span style="width:55px" class="red">-$210</span><span style="width:55px" class="red">-1.8%</span><span><span class="badge badge-blue">Range</span></span><span class="green">Intact</span></div>
+          <div class="tui-row"><span style="width:60px" class="purple">SPY P</span><span style="width:40px">5</span><span style="width:55px" class="red">-$125</span><span style="width:55px" class="red">-12%</span><span><span class="badge badge-blue">Range</span></span><span class="red">Invalid</span></div>
+          <div class="tui-row dim"><span style="width:60px">AMZN</span><span style="width:40px">25</span><span style="width:55px" class="green">+$180</span><span style="width:55px" class="green">+1.1%</span><span><span class="badge badge-yellow">Trend↑</span></span><span class="green">Intact</span></div>
+        </div>
+        <div class="tui-statusbar"><span>↑↓ select  ↵ detail  r regime  a alerts  b briefing</span><span>5 positions  VIX 18.4</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Split View (Recommended)</h3>
+      <p>Positions list always on left, detail panel on right. Select a position to see thesis, IV chart, regime, notes without leaving the view.</p>
+      <div class="tui" style="margin-top:8px">
+        <div class="tui-bar"><span>portfoliod ● running</span><span>09:41:22  NAV $84,230  +$1,027 today</span></div>
+        <div class="tui-split">
+          <div class="tui-left">
+            <div style="padding:3px 4px">
+              <div class="tui-row header"><span>Symbol</span><span>P&L%</span><span>Thesis</span></div>
+              <div class="tui-row" style="background:#1a1e2e"><span class="blue">▶ NVDA</span><span class="green">+3.2%</span><span class="green">●</span></div>
+              <div class="tui-row"><span class="purple">TSLA IC</span><span class="green">+68%</span><span class="yellow">●</span></div>
+              <div class="tui-row"><span class="blue">META</span><span class="red">-1.8%</span><span class="green">●</span></div>
+              <div class="tui-row"><span class="purple">SPY P</span><span class="red">-12%</span><span class="red">●</span></div>
+              <div class="tui-row dim"><span>AMZN</span><span class="green">+1.1%</span><span class="green">●</span></div>
+            </div>
+          </div>
+          <div class="tui-right">
+            <div class="tui-right-top">
+              <div style="font-size:10px; color:#7aa2f7; margin-bottom:3px">NVDA  100 shares  avg $842.10</div>
+              <div style="font-size:9px; display:flex; gap:12px; margin-bottom:4px">
+                <span>IVR <span class="yellow">34</span></span>
+                <span>IVP <span class="yellow">41%</span></span>
+                <span>Regime <span class="yellow">Trending↑</span></span>
+                <span>VIX <span class="blue">18.4</span></span>
+              </div>
+              <div style="font-size:9px; color:#555; margin-bottom:2px">THESIS — Insider cluster buy · Target $1,050 · 4wk · <span class="green">Intact</span></div>
+              <div style="font-size:9px; color:#888">3 insiders bought >$2M combined. Breakout above 200MA confirmed. Hold to earnings.</div>
+            </div>
+            <div class="tui-right-bottom" style="padding:3px 4px">
+              <div style="font-size:9px; color:#555; margin-bottom:2px">ALERTS</div>
+              <div style="font-size:9px; color:#e0af68">⚡ TSLA IC: IV rank dropped to 28 — consider closing early</div>
+              <div style="font-size:9px; color:#f7768e">⚡ SPY P: thesis invalidated — stop level breached</div>
+            </div>
+          </div>
+        </div>
+        <div class="tui-statusbar"><span>↑↓ select  ↵ expand  n note  t thesis  b briefing  q quit</span><span>VIX 18.4  5 pos</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Dashboard Grid</h3>
+      <p>All panels visible at once — portfolio summary, positions, regime, alerts in a grid. Information-dense, no navigation needed.</p>
+      <div class="tui" style="margin-top:8px">
+        <div class="tui-bar"><span>portfoliod ● running</span><span>09:41:22</span></div>
+        <div class="tui-summary">
+          <div class="tui-metric"><div class="val green">$84,230</div><div class="lbl">NAV</div></div>
+          <div class="tui-metric"><div class="val green">+$1,027</div><div class="lbl">Today</div></div>
+          <div class="tui-metric"><div class="val blue">18.4</div><div class="lbl">VIX</div></div>
+          <div class="tui-metric"><div class="val yellow">Trend↑</div><div class="lbl">Regime</div></div>
+          <div class="tui-metric"><div class="val red">2</div><div class="lbl">Alerts</div></div>
+        </div>
+        <div class="tui-panels" style="height:120px">
+          <div class="tui-panel" style="flex:1.4">
+            <div class="tui-panel-title">POSITIONS</div>
+            <div style="font-size:9px">
+              <div style="display:flex;justify-content:space-between;color:#555;margin-bottom:2px"><span>Symbol</span><span>P&L%</span><span>Thesis</span></div>
+              <div style="display:flex;justify-content:space-between;margin-bottom:1px"><span class="blue">NVDA</span><span class="green">+3.2%</span><span class="green">Intact</span></div>
+              <div style="display:flex;justify-content:space-between;margin-bottom:1px"><span class="purple">TSLA IC</span><span class="green">+68%</span><span class="yellow">Watch</span></div>
+              <div style="display:flex;justify-content:space-between;margin-bottom:1px"><span class="blue">META</span><span class="red">-1.8%</span><span class="green">Intact</span></div>
+              <div style="display:flex;justify-content:space-between;margin-bottom:1px"><span class="purple">SPY P</span><span class="red">-12%</span><span class="red">Invalid</span></div>
+            </div>
+          </div>
+          <div class="tui-panel">
+            <div class="tui-panel-title">REGIME</div>
+            <div style="font-size:9px">
+              <div style="margin-bottom:2px">Market <span class="yellow">Trend↑</span></div>
+              <div style="margin-bottom:2px">TSLA <span class="red">PreEarnings</span></div>
+              <div style="margin-bottom:2px">NVDA IVR <span class="green">34</span></div>
+              <div style="margin-bottom:2px">SPY IVP <span class="blue">52%</span></div>
+            </div>
+          </div>
+          <div class="tui-panel">
+            <div class="tui-panel-title">ALERTS</div>
+            <div style="font-size:9px">
+              <div class="yellow" style="margin-bottom:2px">⚡ TSLA IVR→28</div>
+              <div class="red" style="margin-bottom:2px">⚡ SPY thesis X</div>
+            </div>
+          </div>
+        </div>
+        <div class="tui-statusbar"><span>↵ detail  n note  b briefing  q quit</span><span>5 pos  last sync 09:41:18</span></div>
+      </div>
+    </div>
+  </div>
+
+</div>

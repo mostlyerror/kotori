@@ -38,7 +38,7 @@ class StatusBar(Widget):
         yield Label("", id="sb-vix")
         yield Label("", id="sb-regime")
         yield Label("", id="sb-alerts", classes="alert-badge")
-        yield Label("  [i]nbox [g]rid [k]anban [b]riefing", id="sb-keys")
+        yield Label("  [↵] detail   [q] quit", id="sb-keys")
 
     def on_mount(self) -> None:
         self.set_interval(3, self.refresh_stats)
