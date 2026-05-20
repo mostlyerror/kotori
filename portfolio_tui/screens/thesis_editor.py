@@ -71,7 +71,7 @@ class ThesisEditor(ModalScreen):
                 if t.get("time_horizon"):
                     self.query_one("#horizon", Input).value = t["time_horizon"]
                 self.query_one("#status", Select).value = t["status"]
-            self.call_from_thread(populate)
+            populate()
 
     @work
     async def action_save(self) -> None:
@@ -101,4 +101,4 @@ class ThesisEditor(ModalScreen):
                    VALUES (?,?,?,?,?,?,?,?,0,datetime('now'),datetime('now'))""",
                 (self.symbol, "directional", catalyst, source, target, stop, horizon, status)
             )
-        self.call_from_thread(self.dismiss)
+        self.dismiss()

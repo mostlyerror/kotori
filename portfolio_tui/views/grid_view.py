@@ -54,9 +54,9 @@ class GridView(Widget):
             "SELECT symbol, message, triggered_at FROM alerts "
             "ORDER BY triggered_at DESC LIMIT 6"
         )
-        self.call_from_thread(self._update_table, positions)
-        self.call_from_thread(self._update_regime, regimes)
-        self.call_from_thread(self._update_activity, alerts)
+        self._update_table(positions)
+        self._update_regime(regimes)
+        self._update_activity(alerts)
 
     def _update_table(self, positions: list) -> None:
         table = self.query_one("#positions-table", DataTable)

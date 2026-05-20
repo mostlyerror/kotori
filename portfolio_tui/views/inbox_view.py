@@ -51,12 +51,15 @@ class InboxView(Widget):
         Binding("k,up", "focus_previous", "Prev", show=False),
     ]
 
-    items: reactive[list] = reactive([], always_update=True)
+    items: reactive[list | None] = reactive(None)
+    _loaded: bool = False
 
     def compose(self) -> ComposeResult:
-        yield Label("Loading...", id="inbox-content")
+        with Widget(id="inbox-content"):
+            yield Label("Loading...", id="inbox-loading")
 
     def on_mount(self) -> None:
+        self.refresh_items()
         self.set_interval(2, self.refresh_items)
 
     @work(exclusive=True)
@@ -66,26 +69,23 @@ class InboxView(Widget):
             "ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'action_required' THEN 1 ELSE 2 END, created_at"
         )
 
-    def watch_items(self, items: list) -> None:
-        try:
-            self.query_one("#inbox-content").remove()
-        except Exception:
-            pass
+    def watch_items(self, items: list | None) -> None:
+        if items is None:
+            return
+
+        container = self.query_one("#inbox-content")
+        container.remove_children()
 
         if not items:
-            self.mount(InboxZero(id="inbox-content"))
+            container.mount(InboxZero())
             return
 
         urgent = [i for i in items if i["priority"] == "urgent"]
         action = [i for i in items if i["priority"] == "action_required"]
         review = [i for i in items if i["priority"] == "for_review"]
 
-        children = []
         for header, group in [("URGENT", urgent), ("ACTION REQUIRED", action), ("FOR REVIEW", review)]:
             if group:
-                children.append(Label(header, classes="section-header"))
-                children.extend(
-                    InboxItemCard(item, id=f"item-{item['id']}") for item in group
-                )
-
-        self.mount(Widget(*children, id="inbox-content"))
+                container.mount(Label(header, classes="section-header"))
+                for item in group:
+                    container.mount(InboxItemCard(item, id=f"item-{item['id']}"))

@@ -98,7 +98,7 @@ class KanbanView(Widget):
             "SELECT id, symbol, realized_pnl FROM ic_positions "
             "WHERE exit_reason IS NOT NULL ORDER BY rowid DESC LIMIT 5"
         )
-        self.call_from_thread(self._update_lanes, positions, open_ics, candidates, closed_ics)
+        self._update_lanes(positions, open_ics, candidates, closed_ics)
 
     def _update_lanes(self, positions, open_ics, candidates, closed_ics) -> None:
         watching = [{"id": f"w-{p['symbol']}", "symbol": p["symbol"],

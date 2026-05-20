@@ -26,7 +26,13 @@ class BriefingView(Widget):
 
     def compose(self) -> ComposeResult:
         with Widget(classes="briefing-main"):
-            yield TabbedContent(initial="tab-daily", id="briefing-tabs")
+            with TabbedContent(initial="tab-daily", id="briefing-tabs"):
+                with TabPane("Daily", id="tab-daily"):
+                    yield Markdown("_Loading..._", id="md-daily")
+                with TabPane("Weekly", id="tab-weekly"):
+                    yield Markdown("_Weekly briefing will appear here._", id="md-weekly")
+                with TabPane("Monthly", id="tab-monthly"):
+                    yield Markdown("_Monthly briefing will appear here._", id="md-monthly")
         with Widget(classes="briefing-sidebar"):
             yield Label("POSITIONS", classes="sidebar-title")
             yield Widget(id="sidebar-positions")
@@ -34,6 +40,7 @@ class BriefingView(Widget):
             yield Widget(id="sidebar-alerts")
 
     def on_mount(self) -> None:
+        self.refresh_briefing()
         self.set_interval(5, self.refresh_briefing)
 
     @work(exclusive=True)
@@ -51,14 +58,11 @@ class BriefingView(Widget):
             "SELECT symbol, message FROM alerts WHERE acknowledged=0 ORDER BY triggered_at DESC LIMIT 4"
         )
         content = briefing[0]["content"] if briefing else "_No briefing available._"
-        self.call_from_thread(self._update_content, content, positions, alerts)
+        self._update_content(content, positions, alerts)
 
     def _update_content(self, content: str, positions: list, alerts: list) -> None:
-        tabs = self.query_one("#briefing-tabs", TabbedContent)
-        tabs.clear_panes()
-        tabs.add_pane(TabPane("Daily", Markdown(content), id="tab-daily"))
-        tabs.add_pane(TabPane("Weekly", Markdown("_Weekly briefing will appear here._"), id="tab-weekly"))
-        tabs.add_pane(TabPane("Monthly", Markdown("_Monthly briefing will appear here._"), id="tab-monthly"))
+        md_id = f"md-{self._period}"
+        self.query_one(f"#{md_id}", Markdown).update(content)
 
         pos_container = self.query_one("#sidebar-positions")
         pos_container.remove_children()

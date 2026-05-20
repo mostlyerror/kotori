@@ -62,7 +62,7 @@ class PositionDetail(Screen):
             agent_run = await db.query(
                 "SELECT * FROM agent_runs WHERE id=?", (ic[0]["agent_run_id"],)
             )
-        self.call_from_thread(self._render, position, ic, thesis, notes, agent_run)
+        self._render(position, ic, thesis, notes, agent_run)
 
     def _render(self, position, ic, thesis, notes, agent_run) -> None:
         import json
