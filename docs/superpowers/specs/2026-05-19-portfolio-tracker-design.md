@@ -5,7 +5,7 @@ _Date: 2026-05-19_
 
 ## Overview
 
-A Python-based portfolio management system for an active options trader running an iron condor (IC) earnings strategy alongside directional stock/options positions. The system consists of a persistent background daemon (`portfoliod`) that monitors positions, scans IC candidates, and generates AI-powered briefings, paired with a Textual TUI for display and interaction.
+A Python-based portfolio management system for an active options trader running an iron condor (IC) earnings strategy alongside directional stock/options positions. The system consists of a persistent background daemon (`kotorid`) that monitors positions, scans IC candidates, and generates AI-powered briefings, paired with a Textual TUI for display and interaction.
 
 All times are **Central Time (CT)**. Market close = 3:00 PM CT.
 
@@ -15,7 +15,7 @@ All times are **Central Time (CT)**. Market close = 3:00 PM CT.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  portfoliod  (background daemon, runs continuously)      │
+│  kotorid  (background daemon, runs continuously)      │
 │  ┌──────────────┐ ┌────────────┐ ┌──────────────────┐   │
 │  │ tradier_     │ │ iv_engine  │ │ regime_engine    │   │
 │  │ client.py    │ │ .py        │ │ .py              │   │
@@ -38,8 +38,8 @@ All times are **Central Time (CT)**. Market close = 3:00 PM CT.
             └─────────────────────────┘
 ```
 
-- Daemon starts once: `python -m portfoliod`
-- TUI starts separately: `python -m portfolio_tui`
+- Daemon starts once: `python -m kotorid`
+- TUI starts separately: `python -m kotori_tui`
 - TUI polls SQLite every 3 seconds; Textual's reactive system handles re-renders
 - No sockets or REST layer — SQLite is the shared state bus
 - TUI writes thesis/notes directly to SQLite (no daemon involvement)
@@ -280,7 +280,7 @@ generated_at      TIMESTAMP
 ## TUI — Dashboard Grid Layout
 
 ```
-┌─ portfoliod ● running ──────────────── 14:22:11 CT ─── [SANDBOX] ─┐
+┌─ kotorid ● running ──────────────── 14:22:11 CT ─── [SANDBOX] ─┐
 │  NAV $84,230  │  Today +$1,027  │  VIX 18.4  │  Regime normal  │  Alerts 2  │
 ├───────────────────────────────────────────────────────────────────┤
 │ POSITIONS (40%)        │ REGIME (30%)         │ ALERTS (30%)      │
@@ -355,7 +355,7 @@ Lifted directly and adapted for live trading:
 
 ```
 portfolio/
-├── portfoliod/
+├── kotorid/
 │   ├── __main__.py          -- daemon entry point
 │   ├── tradier_client.py    -- REST + SSE wrapper
 │   ├── polygon_client.py    -- historical IV fetches (lifted from earnings-vol)
@@ -367,7 +367,7 @@ portfolio/
 │   ├── alert_engine.py      -- rule evaluation → alerts table
 │   ├── briefing.py          -- Claude daily/weekly/monthly briefings
 │   └── agents/              -- Strategist, RiskManager, DevilsAdvocate, PortfolioManager
-├── portfolio_tui/
+├── kotori_tui/
 │   ├── __main__.py          -- TUI entry point
 │   ├── app.py               -- Textual App, Dashboard Grid layout
 │   ├── screens/
