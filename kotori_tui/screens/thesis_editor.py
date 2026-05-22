@@ -1,8 +1,8 @@
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Input, Label, Select
-from textual.widget import Widget
 from textual import work
 import kotori_tui.db as db
 
@@ -10,13 +10,12 @@ import kotori_tui.db as db
 class ThesisEditor(ModalScreen):
     DEFAULT_CSS = """
     ThesisEditor { align: center middle; }
-    ThesisEditor > Widget {
+    ThesisEditor > VerticalScroll {
         width: 70;
-        height: 20;
+        height: 32;
         border: solid $accent;
         padding: 1 2;
         background: $surface;
-        layout: vertical;
     }
     .field-label { color: $text-muted; margin-top: 1; }
     """
@@ -31,7 +30,7 @@ class ThesisEditor(ModalScreen):
         self.symbol = symbol
 
     def compose(self) -> ComposeResult:
-        with Widget():
+        with VerticalScroll():
             yield Label(f"Edit Thesis — {self.symbol}", classes="detail-title")
             yield Label("Entry Catalyst", classes="field-label")
             yield Input(id="catalyst", placeholder="e.g. Insider cluster buy")

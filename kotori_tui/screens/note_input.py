@@ -1,14 +1,14 @@
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Container
 from textual.screen import ModalScreen
-from textual.widget import Widget
 from textual.widgets import Input, Label
 
 
 class NoteInput(ModalScreen[str]):
     DEFAULT_CSS = """
     NoteInput { align: center middle; }
-    NoteInput > Widget {
+    NoteInput > Container {
         width: 60;
         height: 7;
         border: solid $accent;
@@ -27,7 +27,7 @@ class NoteInput(ModalScreen[str]):
         self.symbol = symbol
 
     def compose(self) -> ComposeResult:
-        with Widget():
+        with Container():
             yield Label(f"Add note for {self.symbol}")
             yield Input(placeholder="Type note and press Enter...", id="note-input")
 
