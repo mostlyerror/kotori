@@ -1,10 +1,38 @@
 import json
+from datetime import date
 from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import Label, Markdown, Static
 from textual.binding import Binding
 from textual import work
 import kotori_tui.db as db
+
+
+def format_position_label(position: dict) -> str:
+    """Render a compact, human-readable label for a position row.
+
+    Stocks return their ticker as-is. Options return broker shorthand
+    derived from the OCC components already split out by position_sync:
+    ``SPY 5/29 747C`` (current-year) or ``SPY 1/15/27 747C`` (year cross).
+    Falls back to the raw OCC symbol if any required column is missing.
+    """
+    if position.get("instrument_type") != "option":
+        return position["symbol"]
+    underlying = position.get("underlying")
+    expiry = position.get("expiry")
+    strike = position.get("strike")
+    put_call = position.get("put_call")
+    if not (underlying and expiry and strike is not None and put_call):
+        return position["symbol"]
+    try:
+        exp = date.fromisoformat(expiry)
+    except ValueError:
+        return position["symbol"]
+    if exp.year == date.today().year:
+        date_part = f"{exp.month}/{exp.day}"
+    else:
+        date_part = f"{exp.month}/{exp.day}/{exp.year % 100:02d}"
+    return f"{underlying} {date_part} {strike:g}{put_call}"
 
 
 PRIORITY_ICON = {"urgent": "🔴", "action_required": "🟡", "for_review": "🔵"}
@@ -99,6 +127,7 @@ class BriefingView(Widget):
         )
         positions = await db.query(
             "SELECT p.symbol, p.current_price, p.unrealized_pnl_pct, "
+            "p.instrument_type, p.underlying, p.expiry, p.strike, p.put_call, "
             "COALESCE(t.status,'—') as status "
             "FROM positions p LEFT JOIN thesis t ON p.symbol=t.symbol "
             "ORDER BY p.symbol"
@@ -144,7 +173,8 @@ class BriefingView(Widget):
             status = p["status"]
             icon = status_icon.get(status, "—")
             pct = (p["unrealized_pnl_pct"] or 0) * 100
-            line = f"{p['symbol']:<6} ${p['current_price']:>8.2f} {pct:+5.1f}% {icon}"
+            label = format_position_label(p)
+            line = f"{label:<15} ${p['current_price']:>8.2f} {pct:+5.1f}% {icon}"
             classes = "position-row"
             if status in valid_thesis_classes:
                 classes += f" thesis-{status}"
