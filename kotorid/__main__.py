@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import signal
 from pathlib import Path
 
@@ -24,7 +25,12 @@ CT = pytz.timezone("America/Chicago")
 
 
 async def ensure_db():
-    """Initialize DB; sync real positions if Tradier creds set, else mock seed."""
+    """Initialize DB; sync real positions when credentials are set.
+
+    Mock data is only seeded when KOTORI_SEED_MOCK is set explicitly — it
+    used to auto-seed whenever TRADIER_API_KEY was unset, but that mingled
+    stale demo rows into live runs whenever the key was temporarily lost.
+    """
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     async with get_db(DB_PATH) as db:
         await init_db(db)
@@ -40,9 +46,14 @@ async def ensure_db():
                 )
             except Exception:
                 log.exception("ensure_db: Tradier sync failed; continuing")
-        else:
+        elif os.environ.get("KOTORI_SEED_MOCK"):
             await seed_mock_data(db)
-            log.info("ensure_db: TRADIER_API_KEY not set — seeded mock data")
+            log.info("ensure_db: KOTORI_SEED_MOCK set — seeded mock data")
+        else:
+            log.info(
+                "ensure_db: TRADIER_API_KEY not set and KOTORI_SEED_MOCK not set "
+                "— starting empty (set KOTORI_SEED_MOCK=1 to populate demo data)"
+            )
         log.info("DB ready at %s", DB_PATH)
 
 

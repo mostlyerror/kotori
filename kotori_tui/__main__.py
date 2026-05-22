@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -31,7 +32,7 @@ async def ensure_db():
                 )
             except Exception:
                 log.exception("ensure_db: Tradier sync failed; continuing")
-        else:
+        elif os.environ.get("KOTORI_SEED_MOCK"):
             await seed_mock_data(db)
 
 
