@@ -83,55 +83,65 @@ async def run():
     await ensure_db()
 
     scheduler = AsyncIOScheduler(timezone=CT)
+    demo_mode = bool(os.environ.get("KOTORI_SEED_MOCK"))
 
-    # 05:30 CT — morning IV ingest (Polygon historical)
-    scheduler.add_job(
-        jobs.iv_ingest_morning,
-        CronTrigger(hour=5, minute=30, timezone=CT),
-        id="iv_ingest_morning",
-    )
-    # 08:00 CT — pre-market gap monitor
+    # Live jobs — registered unconditionally; safe against no-data.
+    # 08:00 CT — pre-market gap monitor (consumes ic_positions.expected_move)
     scheduler.add_job(
         jobs.gap_monitor, CronTrigger(hour=8, minute=0, timezone=CT), id="gap_monitor"
     )
-    # 14:15 CT — pre-close IV refresh (Tradier live chains)
-    scheduler.add_job(
-        jobs.iv_ingest_preclose,
-        CronTrigger(hour=14, minute=15, timezone=CT),
-        id="iv_ingest_preclose",
-    )
-    # 14:30 CT — IC scan + 4-agent pipeline
-    scheduler.add_job(
-        jobs.ic_scan, CronTrigger(hour=14, minute=30, timezone=CT), id="ic_scan"
-    )
-    # 14:50 CT — order executor (approved candidates)
-    scheduler.add_job(
-        jobs.order_executor,
-        CronTrigger(hour=14, minute=50, timezone=CT),
-        id="order_executor",
-    )
-    # 07:00 CT — daily briefing
+    # 07:00 CT — daily briefing (uses Anthropic if key set, static fallback otherwise)
     scheduler.add_job(
         jobs.generate_briefing,
         CronTrigger(hour=7, minute=0, timezone=CT),
         id="generate_briefing",
     )
-    # Every 30s — position monitor
+    # Every 30s — position monitor (consumes ic_positions.current_debit)
     scheduler.add_job(jobs.position_monitor, "interval", seconds=30, id="position_monitor")
 
-    # Every 60s — Tradier position sync + IC state refresh (live API only)
+    # Live API jobs — only when TRADIER_API_KEY is set.
     if TRADIER_API_KEY:
+        # Every 60s — Tradier position sync (broker -> positions table)
         scheduler.add_job(
             _scheduled_position_sync,
             "interval",
             seconds=60,
             id="position_sync",
         )
+        # Every 60s — IC state refresh (live quotes -> current_debit, pct_max_profit)
         scheduler.add_job(
             _scheduled_ic_refresh,
             "interval",
             seconds=60,
             id="ic_refresh",
+        )
+
+    # Demo jobs — stubbed implementations that generate fake IV / candidates.
+    # Only registered when KOTORI_SEED_MOCK=1 so they don't pollute live runs.
+    # TODO: replace with real Polygon historical IV + real agent pipeline.
+    if demo_mode:
+        log.info("KOTORI_SEED_MOCK set — registering demo-mode stub jobs")
+        # 05:30 CT — morning IV ingest (random.gauss stub; needs Polygon)
+        scheduler.add_job(
+            jobs.iv_ingest_morning,
+            CronTrigger(hour=5, minute=30, timezone=CT),
+            id="iv_ingest_morning",
+        )
+        # 14:15 CT — pre-close IV refresh (random.gauss stub; needs Tradier chains)
+        scheduler.add_job(
+            jobs.iv_ingest_preclose,
+            CronTrigger(hour=14, minute=15, timezone=CT),
+            id="iv_ingest_preclose",
+        )
+        # 14:30 CT — IC scan (hardcoded JSON; needs real 4-agent pipeline)
+        scheduler.add_job(
+            jobs.ic_scan, CronTrigger(hour=14, minute=30, timezone=CT), id="ic_scan"
+        )
+        # 14:50 CT — order executor (only marks status='placed'; no Tradier call)
+        scheduler.add_job(
+            jobs.order_executor,
+            CronTrigger(hour=14, minute=50, timezone=CT),
+            id="order_executor",
         )
 
     scheduler.start()
