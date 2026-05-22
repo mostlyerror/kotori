@@ -63,6 +63,25 @@ def parse_occ_symbol(occ: str) -> dict | None:
     }
 
 
+def format_occ_symbol(
+    underlying: str, expiry_iso: str, strike: float, put_call: str
+) -> str:
+    """Build an OCC option symbol from its components.
+
+    Inverse of ``parse_occ_symbol``. ``expiry_iso`` is ISO date
+    (``YYYY-MM-DD``); ``strike`` is in dollars (may have fractional cents
+    for half-strike chains).
+
+    Example: ``format_occ_symbol("SPY", "2026-05-29", 747.5, "C")``
+        -> ``"SPY260529C00747500"``
+    """
+    yy = expiry_iso[2:4]
+    mm = expiry_iso[5:7]
+    dd = expiry_iso[8:10]
+    strike_padded = f"{int(round(strike * 1000)):08d}"
+    return f"{underlying}{yy}{mm}{dd}{put_call}{strike_padded}"
+
+
 def build_client(
     base_url: str | None = None,
     api_key: str | None = None,

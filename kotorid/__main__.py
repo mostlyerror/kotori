@@ -14,6 +14,7 @@ import pytz
 
 from kotorid.config import DB_PATH, TRADIER_API_KEY
 from kotorid.db import get_db, init_db
+from kotorid.ic_sync import refresh_ic_state
 from kotorid.mock_data import seed_mock_data
 from kotorid.position_sync import sync_positions
 from kotorid.tradier_client import build_client, get_account_id
@@ -68,6 +69,16 @@ async def _scheduled_position_sync():
         log.exception("scheduled position_sync failed")
 
 
+async def _scheduled_ic_refresh():
+    """Recurring job: refresh current_debit / pct_max_profit for open ICs."""
+    try:
+        async with get_db(DB_PATH) as db:
+            async with build_client() as client:
+                await refresh_ic_state(db, client)
+    except Exception:
+        log.exception("scheduled ic_refresh failed")
+
+
 async def run():
     await ensure_db()
 
@@ -108,13 +119,19 @@ async def run():
     # Every 30s — position monitor
     scheduler.add_job(jobs.position_monitor, "interval", seconds=30, id="position_monitor")
 
-    # Every 60s — Tradier position sync (only when API key is configured)
+    # Every 60s — Tradier position sync + IC state refresh (live API only)
     if TRADIER_API_KEY:
         scheduler.add_job(
             _scheduled_position_sync,
             "interval",
             seconds=60,
             id="position_sync",
+        )
+        scheduler.add_job(
+            _scheduled_ic_refresh,
+            "interval",
+            seconds=60,
+            id="ic_refresh",
         )
 
     scheduler.start()
