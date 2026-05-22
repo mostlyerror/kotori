@@ -12,6 +12,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
 
+from kotorid.candidate_scan import scan_candidates
 from kotorid.config import DB_PATH, TRADIER_API_KEY
 from kotorid.db import get_db, init_db
 from kotorid.ic_sync import refresh_ic_state
@@ -79,6 +80,16 @@ async def _scheduled_ic_refresh():
         log.exception("scheduled ic_refresh failed")
 
 
+async def _scheduled_candidate_scan():
+    """Daily job: scan the watchlist for iron-condor candidates."""
+    try:
+        async with get_db(DB_PATH) as db:
+            async with build_client() as client:
+                await scan_candidates(db, client)
+    except Exception:
+        log.exception("scheduled candidate_scan failed")
+
+
 async def run():
     await ensure_db()
 
@@ -114,6 +125,12 @@ async def run():
             "interval",
             seconds=60,
             id="ic_refresh",
+        )
+        # 14:30 CT — daily IC candidate scan against the watchlist
+        scheduler.add_job(
+            _scheduled_candidate_scan,
+            CronTrigger(hour=14, minute=30, timezone=CT),
+            id="candidate_scan",
         )
 
     # Demo jobs — stubbed implementations that generate fake IV / candidates.
