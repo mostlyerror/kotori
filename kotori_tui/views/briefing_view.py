@@ -139,11 +139,16 @@ class BriefingView(Widget):
         container = self.query_one("#positions-list")
         await container.remove_children()
         status_icon = {"intact": "●", "weakening": "~", "invalidated": "✗", "—": "—"}
+        valid_thesis_classes = {"intact", "weakening", "invalidated"}
         for p in positions:
-            icon = status_icon.get(p["status"], "—")
+            status = p["status"]
+            icon = status_icon.get(status, "—")
             pct = (p["unrealized_pnl_pct"] or 0) * 100
             line = f"{p['symbol']:<6} ${p['current_price']:>8.2f} {pct:+5.1f}% {icon}"
-            await container.mount(Label(line, classes=f"position-row thesis-{p['status']}"))
+            classes = "position-row"
+            if status in valid_thesis_classes:
+                classes += f" thesis-{status}"
+            await container.mount(Label(line, classes=classes))
 
     def action_open_detail(self) -> None:
         focused = self.app.focused
