@@ -114,6 +114,7 @@ async def test_sync_positions_parses_occ_option(tmp_path):
                 "last": 4.35,
                 "bid": 4.30,
                 "ask": 4.40,
+                "contract_size": 100,
             }
         }
     }
@@ -127,7 +128,8 @@ async def test_sync_positions_parses_occ_option(tmp_path):
 
         cursor = await db.execute(
             "SELECT symbol, instrument_type, underlying, expiry, strike, "
-            "put_call, quantity, market_value, unrealized_pnl FROM positions"
+            "put_call, quantity, avg_cost, market_value, unrealized_pnl "
+            "FROM positions"
         )
         row = await cursor.fetchone()
 
@@ -138,10 +140,12 @@ async def test_sync_positions_parses_occ_option(tmp_path):
     assert row["strike"] == pytest.approx(880.0)
     assert row["put_call"] == "C"
     assert row["quantity"] == -5.0
-    # market_value = -5 * 4.35 = -21.75
-    assert row["market_value"] == pytest.approx(-21.75)
-    # unrealized_pnl = -21.75 - (-1050.0) = 1028.25
-    assert row["unrealized_pnl"] == pytest.approx(1028.25)
+    # Premium collected = $1050 on 5 short contracts = $2.10/share credit.
+    assert row["avg_cost"] == pytest.approx(2.10)
+    # market_value = -5 * 4.35 * 100 = -2175.0 (cost to buy back to close)
+    assert row["market_value"] == pytest.approx(-2175.0)
+    # unrealized_pnl = -2175 - (-1050) = -1125.0 (loss — option moved against the short)
+    assert row["unrealized_pnl"] == pytest.approx(-1125.0)
 
 
 @pytest.mark.asyncio

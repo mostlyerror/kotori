@@ -42,6 +42,22 @@ def _pick_price(quote: dict | None) -> float:
     return 0.0
 
 
+def _multiplier(quote: dict | None) -> int:
+    """Return the contract multiplier reported by Tradier.
+
+    Tradier includes `contract_size` on option quotes (100 for standard
+    equity options, 10 for mini contracts) and omits it for stocks/ETFs.
+    Defaults to 1 so equities work without a separate branch.
+    """
+    if not quote:
+        return 1
+    cs = quote.get("contract_size")
+    try:
+        return int(cs) if cs else 1
+    except (TypeError, ValueError):
+        return 1
+
+
 async def sync_positions(
     db: aiosqlite.Connection,
     client: httpx.AsyncClient,
@@ -71,9 +87,17 @@ async def sync_positions(
         except (TypeError, ValueError):
             continue
 
-        avg_cost = (cost_basis / quantity) if quantity else 0.0
-        current_price = _pick_price(quotes.get(symbol))
-        market_value = quantity * current_price
+        quote = quotes.get(symbol)
+        current_price = _pick_price(quote)
+        multiplier = _multiplier(quote)
+
+        # `notional_qty` is the number of underlying shares represented by
+        # the position (= contracts * contract_size for options, = shares
+        # for stocks). Both avg_cost and market_value are derived in
+        # per-share units so they're comparable across instrument types.
+        notional_qty = quantity * multiplier
+        avg_cost = (cost_basis / notional_qty) if notional_qty else 0.0
+        market_value = notional_qty * current_price
         unrealized_pnl = market_value - cost_basis
         unrealized_pnl_pct = (
             (unrealized_pnl / cost_basis) if cost_basis else 0.0
