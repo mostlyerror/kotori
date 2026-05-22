@@ -1,16 +1,18 @@
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Container
 from textual.screen import Screen
 from textual.widgets import Label, Static
-from textual.widget import Widget
 from textual import work
 import kotori_tui.db as db
+from kotori_tui.views.briefing_view import format_position_label
 
 
 class PositionDetail(Screen):
     DEFAULT_CSS = """
     PositionDetail { layout: grid; grid-size: 2; grid-columns: 1fr 1fr; }
     .detail-panel { border: solid $panel-lighten-1; padding: 1 2; }
+    .detail-panel > Container { height: auto; }
     .detail-title { text-style: bold; color: $accent; margin-bottom: 1; }
     .detail-label { color: $text-muted; }
     .detail-value { text-style: bold; }
@@ -31,14 +33,14 @@ class PositionDetail(Screen):
         self.symbol = symbol
 
     def compose(self) -> ComposeResult:
-        with Widget(classes="detail-panel", id="left-panel"):
+        with Container(classes="detail-panel", id="left-panel"):
             yield Label(f"{self.symbol}", classes="detail-title", id="detail-header")
-            yield Widget(id="price-section")
+            yield Container(id="price-section")
             yield Label("THESIS", classes="detail-label")
-            yield Widget(id="thesis-section")
-        with Widget(classes="detail-panel", id="right-panel"):
+            yield Container(id="thesis-section")
+        with Container(classes="detail-panel", id="right-panel"):
             yield Label("NOTES", classes="detail-label")
-            yield Widget(id="notes-section")
+            yield Container(id="notes-section")
 
     def on_mount(self) -> None:
         self.load_data()
@@ -62,10 +64,13 @@ class PositionDetail(Screen):
             agent_run = await db.query(
                 "SELECT * FROM agent_runs WHERE id=?", (ic[0]["agent_run_id"],)
             )
-        self._render(position, ic, thesis, notes, agent_run)
+        self._populate(position, ic, thesis, notes, agent_run)
 
-    def _render(self, position, ic, thesis, notes, agent_run) -> None:
+    def _populate(self, position, ic, thesis, notes, agent_run) -> None:
         import json
+        if position:
+            label = format_position_label(position[0])
+            self.query_one("#detail-header", Label).update(label)
         price_section = self.query_one("#price-section")
         price_section.remove_children()
 
