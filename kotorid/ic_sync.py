@@ -27,7 +27,20 @@ log = logging.getLogger(__name__)
 
 
 def _leg_quote(quote: dict | None) -> tuple[float, float] | None:
-    """Extract (bid, ask) as floats; return None if either is missing."""
+    """Extract (bid, ask) as floats; return None if the quote isn't usable.
+
+    Rejects three failure modes that produce numerically valid but
+    semantically garbage data:
+
+    1. Missing field — bid or ask is null/absent
+    2. Both-zero — bid=0 AND ask=0 simultaneously (markets closed or
+       pre-market; Tradier returns this rather than null on some days)
+    3. Crossed — bid > ask (stale or corrupt feed)
+
+    A leg with bid=0 but ask>0 is *kept* — that's a legitimate "no
+    resting bid, real ask" state for deep-OTM penny options. Mid pricing
+    still produces a sensible half-penny value there.
+    """
     if not quote:
         return None
     bid = quote.get("bid")
@@ -35,9 +48,14 @@ def _leg_quote(quote: dict | None) -> tuple[float, float] | None:
     if bid is None or ask is None:
         return None
     try:
-        return float(bid), float(ask)
+        bid_f, ask_f = float(bid), float(ask)
     except (TypeError, ValueError):
         return None
+    if bid_f == 0 and ask_f == 0:
+        return None
+    if bid_f > ask_f:
+        return None
+    return bid_f, ask_f
 
 
 async def refresh_ic_state(
