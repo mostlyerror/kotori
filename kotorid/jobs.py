@@ -49,25 +49,54 @@ async def run_position_monitor(db: aiosqlite.Connection) -> list[dict]:
         closed.append({"symbol": ic["symbol"], "exit_reason": reason, "realized_pnl": realized_pnl})
         log.info("position_monitor: %s %s pnl=%.0f", ic["symbol"], reason, realized_pnl)
 
-    # Force-close expired ICs
+    # Force-close ICs that are past their expiry date.
+    #
+    # Two correctness points worth flagging:
+    #
+    # 1. We use `expiry < today`, not `expiry <= today`. The legs are still
+    #    open at the broker on expiry day until 3pm CT settlement. Firing
+    #    force_close at 12:01 AM on expiry day would mark the IC closed in
+    #    our DB hours before the broker actually settles. We wait until the
+    #    next calendar day, by which point ic_refresh has had a chance to
+    #    record a final near-settlement debit.
+    #
+    # 2. realized_pnl is derived from the last-known current_debit when
+    #    available: (entry_credit - current_debit) * 100 * contracts. When
+    #    current_debit is NULL (ic_refresh never ran or always skipped),
+    #    we leave realized_pnl NULL rather than guessing — the old code
+    #    hardcoded 0, which would falsely report every IC as breakeven.
     from datetime import date
     today = date.today().isoformat()
     cursor2 = await db.execute(
-        "SELECT id, symbol, entry_credit, contracts FROM ic_positions "
-        "WHERE exit_reason IS NULL AND expiry <= ?", (today,)
+        "SELECT id, symbol, entry_credit, current_debit, contracts FROM ic_positions "
+        "WHERE exit_reason IS NULL AND expiry < ?", (today,)
     )
     expired = await cursor2.fetchall()
     for ic in expired:
         now_ts = datetime.now(tz=timezone.utc).isoformat()
+        entry_credit = float(ic["entry_credit"]) if ic["entry_credit"] is not None else None
+        if ic["current_debit"] is not None and entry_credit is not None:
+            debit = float(ic["current_debit"])
+            realized_pnl = (entry_credit - debit) * 100 * ic["contracts"]
+            pnl_label = f"P&L ${realized_pnl:+.0f}"
+        else:
+            debit = None
+            realized_pnl = None
+            pnl_label = "P&L unknown — last debit refresh missing, review manually"
         await db.execute(
-            "UPDATE ic_positions SET exit_reason='force_close', realized_pnl=0 WHERE id=?",
-            (ic["id"],)
+            "UPDATE ic_positions SET exit_reason='force_close', exit_debit=?, realized_pnl=? WHERE id=?",
+            (debit, realized_pnl, ic["id"]),
         )
         await db.execute(
             "INSERT INTO alerts (symbol, alert_type, message, triggered_at) VALUES (?,?,?,?)",
-            (ic["symbol"], "force_close", f"{ic['symbol']} IC expired — force closed", now_ts)
+            (ic["symbol"], "force_close",
+             f"{ic['symbol']} IC expired — force closed ({pnl_label})", now_ts),
         )
-        closed.append({"symbol": ic["symbol"], "exit_reason": "force_close", "realized_pnl": 0.0})
+        closed.append({
+            "symbol": ic["symbol"],
+            "exit_reason": "force_close",
+            "realized_pnl": realized_pnl,
+        })
     await db.commit()
 
     return closed
