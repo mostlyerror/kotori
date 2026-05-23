@@ -267,3 +267,62 @@ async def test_gap_monitor_emits_structured_alert(tmp_path, monkeypatch):
     assert fields["short_call"] == pytest.approx(760.0)
     assert fields["short_put"] == pytest.approx(735.0)
     assert fields["expected_move"] == pytest.approx(10.0)
+
+
+@pytest.mark.asyncio
+async def test_position_warning_fires_once_at_50pct_to_stop(tmp_path):
+    """Fires once when debit >= 1.5x entry, dedups via position_warning_at."""
+    db_path = str(tmp_path / "kotori.db")
+    async with get_db(db_path) as db:
+        await init_db(db)
+        # entry_credit=1.00 → stop at debit=2.00. Warn at debit >= 1.50, < 2.00.
+        # debit=1.60 is in the warning zone.
+        await db.execute(
+            """INSERT INTO ic_positions
+               (symbol, entry_date, expiry, short_call, long_call,
+                short_put, long_put, spread_width, entry_credit,
+                contracts, max_loss, current_debit)
+               VALUES ('SPY','2026-05-22','2026-05-29',
+                       760,765,735,730,5,1.00,1,400,1.60)"""
+        )
+        await db.commit()
+
+        # First call fires the warning
+        await run_position_monitor(db)
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM alerts WHERE alert_type='position_warning'"
+        )
+        (count1,) = await cur.fetchone()
+
+        # Second call must NOT fire again
+        await run_position_monitor(db)
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM alerts WHERE alert_type='position_warning'"
+        )
+        (count2,) = await cur.fetchone()
+
+    assert count1 == 1
+    assert count2 == 1
+
+
+@pytest.mark.asyncio
+async def test_position_warning_does_not_fire_below_threshold(tmp_path):
+    """Debit at 1.40 (below 1.5x entry) should not warn."""
+    db_path = str(tmp_path / "kotori.db")
+    async with get_db(db_path) as db:
+        await init_db(db)
+        await db.execute(
+            """INSERT INTO ic_positions
+               (symbol, entry_date, expiry, short_call, long_call,
+                short_put, long_put, spread_width, entry_credit,
+                contracts, max_loss, current_debit)
+               VALUES ('SPY','2026-05-22','2026-05-29',
+                       760,765,735,730,5,1.00,1,400,1.40)"""
+        )
+        await db.commit()
+        await run_position_monitor(db)
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM alerts WHERE alert_type='position_warning'"
+        )
+        (count,) = await cur.fetchone()
+    assert count == 0

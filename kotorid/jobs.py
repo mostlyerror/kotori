@@ -11,13 +11,47 @@ log = logging.getLogger(__name__)
 
 async def run_position_monitor(db: aiosqlite.Connection) -> list[dict]:
     cursor = await db.execute(
-        "SELECT id, symbol, entry_credit, current_debit, contracts FROM ic_positions "
-        "WHERE exit_reason IS NULL AND current_debit IS NOT NULL"
+        "SELECT id, symbol, entry_credit, current_debit, contracts, position_warning_at "
+        "FROM ic_positions WHERE exit_reason IS NULL AND current_debit IS NOT NULL"
     )
     open_ics = await cursor.fetchall()
     closed = []
 
     for ic in open_ics:
+        # position_warning: halfway-to-stop heads-up. Fires once per IC ever.
+        entry = float(ic["entry_credit"] or 0)
+        debit = float(ic["current_debit"] or 0)
+        if (
+            entry > 0
+            and entry * 1.50 <= debit < entry * 2.00
+            and ic["position_warning_at"] is None
+        ):
+            unrealized = (entry - debit) * 100 * (ic["contracts"] or 1)
+            pnl_sign = "-" if unrealized < 0 else "+"
+            now_warn = datetime.now(tz=timezone.utc).isoformat()
+            await create_alert(
+                db,
+                alert_type="position_warning",
+                symbol=ic["symbol"],
+                headline=f"Position Warning — {ic['symbol']}",
+                body_lines=[
+                    f"Debit ${debit:.2f} (entry credit ${entry:.2f}) — halfway to stop.",
+                    f"Unrealized P/L: {pnl_sign}${abs(unrealized):.0f}.",
+                    f"Stop fires at debit ${entry*2.00:.2f}. Consider closing manually.",
+                ],
+                fields={
+                    "entry_credit": entry,
+                    "current_debit": debit,
+                    "unrealized_pnl": unrealized,
+                },
+                triggered_at=now_warn,
+            )
+            await db.execute(
+                "UPDATE ic_positions SET position_warning_at=? WHERE id=?",
+                (now_warn, ic["id"]),
+            )
+            await db.commit()
+
         reason = check_exit_trigger(ic["entry_credit"], ic["current_debit"])
         if reason is None:
             continue
