@@ -240,26 +240,25 @@ async def ic_scan():
 
 
 async def order_executor():
+    """Place approved IC candidates against the live Tradier API.
+
+    Delegates to kotorid.order_placement.place_approved_candidates which
+    handles the multileg POST, candidate state transition, ic_positions
+    row materialization, and inbox card dismissal.
+    """
+    from kotorid.config import TRADIER_API_KEY
+    from kotorid.order_placement import place_approved_candidates
+    from kotorid.tradier_client import build_client, get_account_id
+
+    if not TRADIER_API_KEY:
+        log.info("order_executor: TRADIER_API_KEY not set — skipping")
+        return
+
     async with get_db(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT id, symbol, short_call, long_call, short_put, long_put, "
-            "expected_credit, contracts FROM candidates WHERE order_status='approved'"
-        )
-        approved = await cursor.fetchall()
-        now = datetime.now(tz=timezone.utc).isoformat()
-        for c in approved:
-            await db.execute(
-                "UPDATE candidates SET order_status='placed' WHERE id=?", (c["id"],)
-            )
-            await db.execute(
-                """INSERT INTO alerts (symbol, alert_type, message, triggered_at)
-                   VALUES (?,?,?,?)""",
-                (c["symbol"], "order_placed",
-                 f"{c['symbol']} IC order placed — cr${c['expected_credit']:.2f}",
-                 now)
-            )
-        await db.commit()
-        log.info("order_executor: placed %d orders", len(approved))
+        async with build_client() as client:
+            account_id = await get_account_id(client)
+            placed = await place_approved_candidates(db, client, account_id)
+        log.info("order_executor: placed %d order(s)", len(placed))
 
 
 async def generate_briefing():

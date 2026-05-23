@@ -132,6 +132,13 @@ async def run():
             CronTrigger(hour=14, minute=30, timezone=CT),
             id="candidate_scan",
         )
+        # 14:50 CT — fallback executor for any approved-but-not-yet-placed candidates.
+        # The TUI's 'a' keystroke places immediately; this catches off-hours approvals.
+        scheduler.add_job(
+            jobs.order_executor,
+            CronTrigger(hour=14, minute=50, timezone=CT),
+            id="order_executor",
+        )
 
     # Demo jobs — stubbed implementations that generate fake IV / candidates.
     # Only registered when KOTORI_SEED_MOCK=1 so they don't pollute live runs.
@@ -150,15 +157,10 @@ async def run():
             CronTrigger(hour=14, minute=15, timezone=CT),
             id="iv_ingest_preclose",
         )
-        # 14:30 CT — IC scan (hardcoded JSON; needs real 4-agent pipeline)
+        # 14:30 CT — legacy IC scan stub (hardcoded JSON; superseded by
+        # _scheduled_candidate_scan in live mode but kept for demo runs).
         scheduler.add_job(
             jobs.ic_scan, CronTrigger(hour=14, minute=30, timezone=CT), id="ic_scan"
-        )
-        # 14:50 CT — order executor (only marks status='placed'; no Tradier call)
-        scheduler.add_job(
-            jobs.order_executor,
-            CronTrigger(hour=14, minute=50, timezone=CT),
-            id="order_executor",
         )
 
     scheduler.start()

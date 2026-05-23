@@ -99,6 +99,8 @@ class BriefingView(Widget):
         Binding("j,down", "focus_next", "Next", show=False),
         Binding("k,up", "focus_previous", "Prev", show=False),
         Binding("enter", "open_detail", "Detail", show=True),
+        Binding("a", "approve_candidate", "Approve", show=True),
+        Binding("r", "reject_candidate", "Reject", show=True),
     ]
 
     def compose(self) -> ComposeResult:
@@ -191,3 +193,83 @@ class BriefingView(Widget):
         symbol = focused.item.get("symbol")
         if symbol:
             self.app.open_position_detail(symbol)
+
+    def _focused_candidate_card(self) -> InboxCard | None:
+        """Return the focused inbox card if it represents an ic_candidate."""
+        focused = self.app.focused
+        if not isinstance(focused, InboxCard):
+            return None
+        if focused.item.get("item_type") != "ic_candidate":
+            return None
+        return focused
+
+    @work(exclusive=True)
+    async def action_approve_candidate(self) -> None:
+        """Approve the focused candidate and place the IC immediately.
+
+        Marks the candidate row order_status='approved', then invokes the
+        same order placement path the daily cron uses (place_approved_-
+        candidates). On success the candidate moves to 'placed', a new
+        ic_positions row appears, the inbox card is dismissed, and the
+        view refreshes. On API failure the candidate stays 'approved'
+        for the cron to retry.
+        """
+        import aiosqlite
+        from kotorid.config import DB_PATH, TRADIER_API_KEY
+        from kotorid.db import get_db
+        from kotorid.order_placement import place_approved_candidates
+        from kotorid.tradier_client import build_client, get_account_id
+
+        card = self._focused_candidate_card()
+        if not card or not TRADIER_API_KEY:
+            return
+        symbol = card.item["symbol"]
+
+        # Mark the most recent pending candidate for this symbol as approved.
+        # Multiple-per-symbol-per-day is ruled out by candidate_scan dedupe;
+        # ORDER BY scan_date DESC is belt-and-suspenders in case a row slipped
+        # through under some other path.
+        await db.execute(
+            """UPDATE candidates SET order_status='approved'
+               WHERE id = (
+                   SELECT id FROM candidates
+                   WHERE symbol=? AND order_status='pending_approval'
+                   ORDER BY scan_date DESC LIMIT 1
+               )""",
+            (symbol,),
+        )
+
+        # Place against the live broker right now (don't wait for the cron).
+        async with build_client() as client:
+            account_id = await get_account_id(client)
+            async with get_db(DB_PATH) as conn:
+                await place_approved_candidates(conn, client, account_id)
+
+        # Trigger a refresh so the new IC + dismissed card flow into the view.
+        self.refresh_data()
+
+    @work(exclusive=True)
+    async def action_reject_candidate(self) -> None:
+        """Reject the focused candidate and dismiss the inbox card."""
+        from datetime import datetime, timezone
+
+        card = self._focused_candidate_card()
+        if not card:
+            return
+        symbol = card.item["symbol"]
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
+        await db.execute(
+            """UPDATE candidates SET order_status='rejected'
+               WHERE id = (
+                   SELECT id FROM candidates
+                   WHERE symbol=? AND order_status='pending_approval'
+                   ORDER BY scan_date DESC LIMIT 1
+               )""",
+            (symbol,),
+        )
+        await db.execute(
+            """UPDATE inbox_items SET dismissed_at=?
+               WHERE item_type='ic_candidate' AND symbol=? AND dismissed_at IS NULL""",
+            (now_iso, symbol),
+        )
+        self.refresh_data()
