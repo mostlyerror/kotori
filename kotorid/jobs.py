@@ -503,3 +503,69 @@ async def post_latest_briefing_to_discord(
     except httpx.HTTPError:
         log.exception("post_latest_briefing_to_discord: POST failed")
         return False
+
+
+async def build_eod_recap_payload(db: aiosqlite.Connection) -> dict:
+    """Build the EOD recap Discord payload from today's activity."""
+    from datetime import date
+    today_iso = date.today().isoformat()
+
+    # Realized P/L today: sum of realized_pnl for ICs whose closing alert
+    # was triggered today.
+    realized_cur = await db.execute(
+        """SELECT IFNULL(SUM(p.realized_pnl), 0) AS total,
+                  COUNT(*) AS closed_count,
+                  SUM(CASE WHEN p.realized_pnl > 0 THEN 1 ELSE 0 END) AS wins
+           FROM ic_positions p
+           JOIN alerts a ON a.symbol = p.symbol
+           WHERE a.alert_type IN ('profit_target','stop_loss','force_close')
+             AND date(a.triggered_at)=?
+             AND p.exit_reason IS NOT NULL""",
+        (today_iso,),
+    )
+    realized_row = await realized_cur.fetchone()
+    realized = realized_row["total"] or 0.0
+    closed_count = realized_row["closed_count"] or 0
+    wins = realized_row["wins"] or 0
+    losses = closed_count - wins
+
+    open_cur = await db.execute(
+        "SELECT COUNT(*) AS n FROM ic_positions WHERE exit_reason IS NULL"
+    )
+    open_count = (await open_cur.fetchone())["n"]
+
+    title = f"📈 EOD Recap — {date.today().strftime('%a %b %d %Y')}"
+    pnl_sign = "+" if realized >= 0 else "-"
+    description_lines = [
+        f"• Realized P/L today: {pnl_sign}${abs(realized):.0f} "
+        f"({wins} win{'s' if wins != 1 else ''}, "
+        f"{losses} loss{'es' if losses != 1 else ''})",
+        f"• {open_count} IC{'s' if open_count != 1 else ''} open",
+        f"• {closed_count} closed today",
+    ]
+    return {
+        "embeds": [{
+            "title": title,
+            "description": "\n".join(description_lines),
+            "color": 3066993,
+            "footer": {"text": "kotori"},
+        }]
+    }
+
+
+async def eod_recap_job():
+    """Scheduled wrapper: build EOD recap and post to Discord."""
+    from kotorid.config import DB_PATH
+    from kotorid.db import get_db as _get_db
+    from kotorid.notify import webhook_url as _webhook_url
+    url = _webhook_url()
+    if not url:
+        return
+    try:
+        async with _get_db(DB_PATH) as db:
+            payload = await build_eod_recap_payload(db)
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(url, json=payload, timeout=10.0)
+                resp.raise_for_status()
+    except Exception:
+        log.exception("eod_recap_job failed")
