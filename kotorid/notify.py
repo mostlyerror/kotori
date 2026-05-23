@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 import aiosqlite
 import httpx
 
+from kotorid.alerts_lib import parse_alert_message
+
 log = logging.getLogger(__name__)
 
 # Discord embed colors (decimal RGB). Picked for at-a-glance reading.
@@ -42,16 +44,30 @@ def format_alert_embed(alert: dict) -> dict:
     Returns the full payload dict (with an ``embeds`` array of one), not
     just the embed — so the caller can httpx.post(..., json=payload)
     directly without further wrapping.
+
+    Structured alerts (created via ``alerts_lib.create_alert`` with
+    ``body_lines`` / ``fields``) render the headline as the embed title
+    and the body lines joined by newlines as the description. Legacy
+    rows (plain string in ``message``) keep the previous behavior.
     """
     alert_type = alert.get("alert_type") or "unknown"
     title, color = _ALERT_STYLE.get(alert_type, (f"⚪ {alert_type}", _COLOR_GRAY))
     symbol = alert.get("symbol") or "—"
-    message = alert.get("message") or ""
+    raw_message = alert.get("message") or ""
     triggered_at = alert.get("triggered_at") or datetime.now(tz=timezone.utc).isoformat()
+
+    plain, payload = parse_alert_message(raw_message)
+    if payload:
+        # Structured: first line of `plain` is the headline; body_lines follow.
+        body_lines = payload.get("body_lines") or []
+        description = "\n".join(body_lines) if body_lines else plain
+    else:
+        description = plain
+
     return {
         "embeds": [{
             "title": f"{title} — {symbol}",
-            "description": message,
+            "description": description,
             "color": color,
             "timestamp": triggered_at,
             "footer": {"text": "kotori"},

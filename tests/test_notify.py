@@ -172,3 +172,48 @@ async def test_notify_pending_alerts_continues_on_single_post_failure(tmp_path):
         by_symbol = {r["symbol"]: r["notified_at"] for r in rows}
     assert by_symbol["QQQ"] is not None
     assert by_symbol["SPY"] is None  # left for retry on next cycle
+
+
+from kotorid.alerts_lib import ALERT_FIELDS_KEY
+from kotorid.notify import format_alert_embed
+
+
+def test_format_alert_embed_renders_structured_message():
+    """When message contains the structured marker, headline + body_lines render in embed."""
+    structured = {
+        "body_lines": [
+            "Closed at debit $1.85 (entry credit $1.00).",
+            "Loss: −$400 (100% of max).",
+            "Driver: short put 730 went $0.45 → $1.20 (+167%).",
+        ],
+        "fields": {"realized_pnl": -400.0},
+    }
+    import json
+    message = "Stop Loss — SPY 5/29" + ALERT_FIELDS_KEY + json.dumps(structured)
+    alert = {
+        "alert_type": "stop_loss",
+        "symbol": "SPY",
+        "message": message,
+        "triggered_at": "2026-05-23T20:00:00+00:00",
+    }
+    payload = format_alert_embed(alert)
+    embed = payload["embeds"][0]
+
+    # Title still uses the alert_type style + symbol
+    assert "Stop Loss" in embed["title"]
+    assert "SPY" in embed["title"]
+    # Description should contain each body line
+    for line in structured["body_lines"]:
+        assert line in embed["description"]
+
+
+def test_format_alert_embed_legacy_message_unchanged():
+    """Plain string messages render exactly as before."""
+    alert = {
+        "alert_type": "stop_loss",
+        "symbol": "SPY",
+        "message": "SPY IC: stop loss — P&L $-400",
+        "triggered_at": "2026-05-23T20:00:00+00:00",
+    }
+    payload = format_alert_embed(alert)
+    assert payload["embeds"][0]["description"] == "SPY IC: stop loss — P&L $-400"
