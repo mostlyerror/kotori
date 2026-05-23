@@ -5,7 +5,7 @@ import pytest
 from kotorid.alerts_lib import ALERT_FIELDS_KEY
 from kotorid.db import get_db, init_db
 from kotorid.mock_data import seed_mock_data
-from kotorid.jobs import run_position_monitor
+from kotorid.jobs import gap_monitor, run_position_monitor
 
 @pytest.mark.asyncio
 async def test_position_monitor_no_triggers_on_fresh_data(tmp_path):
@@ -183,3 +183,87 @@ async def test_stop_loss_alert_has_structured_content(tmp_path):
     assert "$1.00" in body  # entry credit
     assert "$2.10" in body  # exit debit
     assert "-$110" in body or "−$110" in body  # realized loss
+
+
+@pytest.mark.asyncio
+async def test_force_close_alert_is_structured(tmp_path):
+    # Debit 0.75 is in the dead zone (entry_credit=1.00 -> profit_target
+    # threshold 0.50, stop_loss threshold 2.00), so neither pre-empt
+    # force_close. Expected pnl = (1.00 - 0.75) * 100 * 1 = 25.
+    db_path = str(tmp_path / "kotori.db")
+    async with get_db(db_path) as db:
+        await init_db(db)
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        await db.execute(
+            """INSERT INTO ic_positions
+               (symbol, entry_date, expiry, short_call, long_call,
+                short_put, long_put, spread_width, entry_credit,
+                contracts, max_loss, current_debit)
+               VALUES ('SPY','2026-05-19',?,760,765,735,730,5,1.00,1,400,0.75)""",
+            (yesterday,),
+        )
+        await db.commit()
+
+        await run_position_monitor(db)
+
+        cur = await db.execute(
+            "SELECT message FROM alerts WHERE alert_type='force_close'"
+        )
+        row = await cur.fetchone()
+
+    assert row is not None
+    assert ALERT_FIELDS_KEY in row["message"]
+    _, _, json_tail = row["message"].partition(ALERT_FIELDS_KEY)
+    payload = json.loads(json_tail)
+    fields = payload["fields"]
+    assert fields["realized_pnl"] == pytest.approx(25.0)
+    assert fields["entry_credit"] == pytest.approx(1.00)
+    assert fields["exit_debit"] == pytest.approx(0.75)
+
+
+@pytest.mark.asyncio
+async def test_gap_monitor_emits_structured_alert(tmp_path, monkeypatch):
+    """gap_monitor should write a structured gap_risk alert when an open
+    IC's underlying price is within 50% of expected_move of a short strike."""
+    db_path = str(tmp_path / "gap.db")
+    # gap_monitor opens its own connection via get_db(DB_PATH); point it here.
+    monkeypatch.setattr("kotorid.jobs.DB_PATH", db_path)
+
+    async with get_db(db_path) as db:
+        await init_db(db)
+        # Open IC: short call 760, short put 735, expected_move 10.
+        # 50% of expected_move = 5. If price = 757, cushion_call = 3 < 5 -> fire.
+        await db.execute(
+            """INSERT INTO ic_positions
+               (symbol, entry_date, expiry, short_call, long_call,
+                short_put, long_put, spread_width, entry_credit,
+                contracts, max_loss, regime_at_entry, expected_move)
+               VALUES ('SPY','2026-05-20','2026-05-29',
+                       760,765,735,730,5,1.00,1,400,'normal',10.0)"""
+        )
+        # positions row with current_price (gap_monitor reads from positions).
+        await db.execute(
+            """INSERT INTO positions
+               (symbol, quantity, avg_cost, current_price, market_value,
+                unrealized_pnl, unrealized_pnl_pct, instrument_type, last_updated)
+               VALUES ('SPY',0,0,757.0,0,0,0,'stock','2026-05-22T00:00:00')"""
+        )
+        await db.commit()
+
+    await gap_monitor()
+
+    async with get_db(db_path) as db:
+        cur = await db.execute(
+            "SELECT message FROM alerts WHERE alert_type='gap_risk'"
+        )
+        row = await cur.fetchone()
+
+    assert row is not None
+    assert ALERT_FIELDS_KEY in row["message"]
+    _, _, json_tail = row["message"].partition(ALERT_FIELDS_KEY)
+    payload = json.loads(json_tail)
+    fields = payload["fields"]
+    assert fields["price"] == pytest.approx(757.0)
+    assert fields["short_call"] == pytest.approx(760.0)
+    assert fields["short_put"] == pytest.approx(735.0)
+    assert fields["expected_move"] == pytest.approx(10.0)

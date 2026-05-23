@@ -83,7 +83,7 @@ async def run_position_monitor(db: aiosqlite.Connection) -> list[dict]:
     from datetime import date
     today = date.today().isoformat()
     cursor2 = await db.execute(
-        "SELECT id, symbol, entry_credit, current_debit, contracts FROM ic_positions "
+        "SELECT id, symbol, expiry, entry_credit, current_debit, contracts FROM ic_positions "
         "WHERE exit_reason IS NULL AND expiry < ?", (today,)
     )
     expired = await cursor2.fetchall()
@@ -102,10 +102,29 @@ async def run_position_monitor(db: aiosqlite.Connection) -> list[dict]:
             "UPDATE ic_positions SET exit_reason='force_close', exit_debit=?, realized_pnl=? WHERE id=?",
             (debit, realized_pnl, ic["id"]),
         )
-        await db.execute(
-            "INSERT INTO alerts (symbol, alert_type, message, triggered_at) VALUES (?,?,?,?)",
-            (ic["symbol"], "force_close",
-             f"{ic['symbol']} IC expired — force closed ({pnl_label})", now_ts),
+        if realized_pnl is not None:
+            body_lines = [
+                f"IC expired {ic['symbol']} {ic['expiry']}.",
+                f"Final debit ${debit:.2f} (entry credit ${entry_credit:.2f}).",
+                f"Realized P/L: {'-' if realized_pnl < 0 else ('+' if realized_pnl > 0 else '')}${abs(realized_pnl):.0f}.",
+            ]
+        else:
+            body_lines = [
+                f"IC expired {ic['symbol']} {ic['expiry']}.",
+                "Final debit unknown — last refresh missing; review manually.",
+            ]
+        await create_alert(
+            db,
+            alert_type="force_close",
+            symbol=ic["symbol"],
+            headline=f"IC Closed (Expiry) — {ic['symbol']}",
+            body_lines=body_lines,
+            fields={
+                "entry_credit": entry_credit,
+                "exit_debit": debit,
+                "realized_pnl": realized_pnl,
+            },
+            triggered_at=now_ts,
         )
         closed.append({
             "symbol": ic["symbol"],
@@ -174,6 +193,28 @@ async def gap_monitor():
                      f"Price ${price:.2f} within 50% of expected move from short strikes. "
                      f"SC ${ic['short_call']:.0f} / SP ${ic['short_put']:.0f}.",
                      '["close_ic","hedge","dismiss"]', now)
+                )
+                await create_alert(
+                    db,
+                    alert_type="gap_risk",
+                    symbol=ic["symbol"],
+                    headline=f"Gap Risk — {ic['symbol']}",
+                    body_lines=[
+                        f"Price ${price:.2f} vs SC ${ic['short_call']:.0f} "
+                        f"/ SP ${ic['short_put']:.0f}.",
+                        f"Cushion: call ${cushion_call:.2f}, put ${cushion_put:.2f} "
+                        f"(expected move ${ic['expected_move']:.2f}).",
+                        "Within 50% of expected move from a short strike — review before open.",
+                    ],
+                    fields={
+                        "price": price,
+                        "short_call": float(ic["short_call"]),
+                        "short_put": float(ic["short_put"]),
+                        "cushion_call": cushion_call,
+                        "cushion_put": cushion_put,
+                        "expected_move": float(ic["expected_move"]),
+                    },
+                    triggered_at=now,
                 )
         await db.commit()
         log.info("gap_monitor: checked %d open ICs", len(open_ics))

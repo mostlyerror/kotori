@@ -5,6 +5,7 @@ from datetime import date
 import httpx
 import pytest
 
+from kotorid.alerts_lib import ALERT_FIELDS_KEY
 from kotorid.db import get_db, init_db
 from kotorid.order_placement import place_approved_candidates, place_iron_condor
 from kotorid.tradier_client import build_client
@@ -229,3 +230,35 @@ async def test_place_approved_candidates_noop_when_no_approved_rows(tmp_path):
         async with _make_client(handler) as c:
             placed = await place_approved_candidates(db, c, "ACCT-X")
         assert placed == []
+
+
+@pytest.mark.asyncio
+async def test_ic_placed_alert_is_structured(tmp_path):
+    """ic_placed alert should carry structured body_lines + fields with
+    order_id, expiry, expected_credit, max_loss."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and "/orders" in request.url.path:
+            return httpx.Response(200, json={"order": {"id": 12345, "status": "ok"}})
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    db_path = str(tmp_path / "icplaced.db")
+    async with get_db(db_path) as db:
+        await init_db(db)
+        await _seed_one_approved_candidate(db, symbol="SPY", expiry="2026-05-29")
+        async with _make_client(handler) as c:
+            placed = await place_approved_candidates(db, c, "ACCT-X")
+        assert len(placed) == 1
+
+        alert = await (await db.execute(
+            "SELECT message FROM alerts WHERE alert_type='ic_placed' AND symbol='SPY'"
+        )).fetchone()
+
+    assert alert is not None
+    assert ALERT_FIELDS_KEY in alert["message"]
+    _, _, json_tail = alert["message"].partition(ALERT_FIELDS_KEY)
+    payload = json.loads(json_tail)
+    fields = payload["fields"]
+    assert fields["order_id"] == "12345"
+    assert fields["expiry"] == "2026-05-29"
+    assert fields["expected_credit"] == pytest.approx(1.00)
+    assert fields["max_loss"] == pytest.approx(400.0)

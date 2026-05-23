@@ -21,6 +21,7 @@ from datetime import date, datetime, timezone
 import aiosqlite
 import httpx
 
+from kotorid.alerts_lib import create_alert
 from kotorid.tradier_client import format_occ_symbol
 
 log = logging.getLogger(__name__)
@@ -157,14 +158,28 @@ async def place_approved_candidates(
                WHERE item_type='ic_candidate' AND symbol=? AND dismissed_at IS NULL""",
             (now_iso, cand["symbol"]),
         )
-        await db.execute(
-            """INSERT INTO alerts (symbol, alert_type, message, triggered_at)
-               VALUES (?,?,?,?)""",
-            (
-                cand["symbol"], "ic_placed",
-                f"{cand['symbol']} IC placed (order id {order_resp.get('order', {}).get('id', '?')})",
-                now_iso,
-            ),
+        order_id_str = str(order_resp.get("order", {}).get("id", "")) or "?"
+        await create_alert(
+            db,
+            alert_type="ic_placed",
+            symbol=cand["symbol"],
+            headline=f"Order Placed — {cand['symbol']}",
+            body_lines=[
+                f"4-leg IC submitted to Tradier for {expiry}.",
+                f"Strikes: SC{int(float(cand['short_call']))}/LC{int(float(cand['long_call']))} "
+                f"SP{int(float(cand['short_put']))}/LP{int(float(cand['long_put']))}.",
+                f"Estimated credit ${float(cand['expected_credit']):.2f}, "
+                f"max loss ${float(cand['max_loss']):.0f}.",
+                f"Tradier order id: {order_id_str}.",
+            ],
+            fields={
+                "order_id": order_id_str,
+                "expiry": expiry,
+                "expected_credit": float(cand["expected_credit"]),
+                "max_loss": float(cand["max_loss"]),
+                "contracts": cand["contracts"] or 1,
+            },
+            triggered_at=now_iso,
         )
         placed.append({
             "candidate_id": cand["id"],
