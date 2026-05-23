@@ -106,6 +106,23 @@ async def _scheduled_notify_alerts():
         log.exception("scheduled notify_alerts failed")
 
 
+async def _scheduled_heartbeat():
+    """Recurring job: post a heartbeat digest to Discord."""
+    from kotorid.heartbeat import build_heartbeat_line, post_heartbeat
+    from datetime import datetime
+    url = webhook_url()
+    if not url:
+        return
+    try:
+        async with get_db(DB_PATH) as db:
+            async with httpx.AsyncClient() as client:
+                now_ct = datetime.now(tz=CT).strftime("%H:%M CT")
+                line = await build_heartbeat_line(db, now_ct_label=now_ct)
+                await post_heartbeat(client, url, line)
+    except Exception:
+        log.exception("scheduled heartbeat failed")
+
+
 async def run():
     await ensure_db()
 
@@ -135,6 +152,19 @@ async def run():
             id="notify_alerts",
         )
         log.info("notify_alerts: Discord webhook configured, notifications enabled")
+
+        # Every 15 min during market hours — heartbeat digest
+        scheduler.add_job(
+            _scheduled_heartbeat,
+            CronTrigger(
+                day_of_week="mon-fri",
+                hour="8-15",
+                minute="0,15,30,45",
+                timezone=CT,
+            ),
+            id="heartbeat",
+        )
+        log.info("heartbeat: registered, every 15min Mon-Fri 08:00-15:45 CT")
 
     # Live API jobs — only when TRADIER_API_KEY is set.
     if TRADIER_API_KEY:
