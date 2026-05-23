@@ -24,6 +24,8 @@ from datetime import date, datetime, timezone
 import aiosqlite
 import httpx
 
+from kotorid.alerts_lib import create_alert
+
 log = logging.getLogger(__name__)
 
 DEFAULT_WATCHLIST = ["SPY", "QQQ", "IWM", "AAPL", "NVDA", "TSLA", "MSFT", "AMZN", "META", "GOOGL"]
@@ -271,5 +273,29 @@ async def scan_candidates(
             continue
         if result:
             written.append(result)
+    if written:
+        top = max(written, key=lambda c: c["credit"] / (c["max_loss"] / 100))
+        body_lines = [
+            f"{len(written)} candidate(s) ready for approval.",
+            f"Top pick: {top['symbol']} {top['expiry']} — "
+            f"credit ${top['credit']:.2f}, max loss ${top['max_loss']:.0f}.",
+            f"Strikes: SC{int(top['short_call'])}/LC{int(top['long_call'])} "
+            f"SP{int(top['short_put'])}/LP{int(top['long_put'])}.",
+            "Approve in TUI or wait — auto-place fallback at 14:50 CT.",
+        ]
+        await create_alert(
+            db,
+            alert_type="candidate_ready",
+            symbol=top["symbol"],
+            headline="Candidates Ready",
+            body_lines=body_lines,
+            fields={
+                "count": len(written),
+                "symbols": [c["symbol"] for c in written],
+                "credit": top["credit"],
+                "max_loss": top["max_loss"],
+            },
+        )
+        await db.commit()
     log.info("candidate_scan: wrote %d candidate(s) from %d symbols", len(written), len(syms))
     return written

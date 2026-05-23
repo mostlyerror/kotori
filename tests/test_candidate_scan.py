@@ -190,3 +190,33 @@ async def test_scan_candidates_processes_full_watchlist(tmp_path):
             written = await scan_candidates(db, c, symbols=["SPY", "QQQ", "IWM"])
         assert len(written) == 3
         assert {w["symbol"] for w in written} == {"SPY", "QQQ", "IWM"}
+
+
+@pytest.mark.asyncio
+async def test_scan_candidates_emits_candidate_ready_alert(tmp_path):
+    """When scan_candidates writes >=1 candidate, it must enqueue a
+    candidate_ready Discord alert with structured fields."""
+    import json as _json
+
+    from kotorid.alerts_lib import ALERT_FIELDS_KEY
+
+    db_path = str(tmp_path / "alert.db")
+    async with get_db(db_path) as db:
+        await init_db(db)
+        async with _make_client(_scan_handler(spot=750)) as c:
+            written = await scan_candidates(db, c, symbols=["SPY"])
+        assert len(written) == 1
+
+        row = await (await db.execute(
+            "SELECT symbol, alert_type, message FROM alerts "
+            "WHERE alert_type='candidate_ready'"
+        )).fetchone()
+        assert row is not None, "expected a candidate_ready alert row"
+        assert row["symbol"] == "SPY"
+        assert ALERT_FIELDS_KEY in row["message"]
+
+        _, _, json_tail = row["message"].partition(ALERT_FIELDS_KEY)
+        payload = _json.loads(json_tail)
+        fields = payload["fields"]
+        assert fields["count"] >= 1
+        assert fields["credit"] > 0

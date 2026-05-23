@@ -34,6 +34,7 @@ _ALERT_STYLE = {
     "force_close":   ("🔵 IC Closed (Expiry)", _COLOR_BLUE),
     "ic_placed":     ("🟢 IC Placed", _COLOR_GREEN),
     "gap_risk":      ("🟠 Gap Risk", _COLOR_ORANGE),
+    "candidate_ready": ("⚠️ Candidates Ready", _COLOR_ORANGE),
     "order_placed":  ("🟢 Order Placed", _COLOR_GREEN),  # legacy
 }
 
