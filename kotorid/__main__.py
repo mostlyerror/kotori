@@ -106,6 +106,25 @@ async def _scheduled_notify_alerts():
         log.exception("scheduled notify_alerts failed")
 
 
+async def _scheduled_briefing():
+    """Run briefing generation; on success, post to Discord if configured.
+
+    generate_briefing() is a no-arg job that opens its own DB connection
+    and writes the new row itself. We then open a fresh connection to read
+    the row back and POST to Discord.
+    """
+    try:
+        await jobs.generate_briefing()
+        url = webhook_url()
+        if not url:
+            return
+        async with get_db(DB_PATH) as db:
+            async with httpx.AsyncClient() as client:
+                await jobs.post_latest_briefing_to_discord(db, client, url)
+    except Exception:
+        log.exception("scheduled briefing failed")
+
+
 async def _scheduled_heartbeat():
     """Recurring job: post a heartbeat digest to Discord."""
     from kotorid.heartbeat import build_heartbeat_line, post_heartbeat
@@ -134,9 +153,10 @@ async def run():
     scheduler.add_job(
         jobs.gap_monitor, CronTrigger(hour=8, minute=0, timezone=CT), id="gap_monitor"
     )
-    # 07:00 CT — daily briefing (uses Anthropic if key set, static fallback otherwise)
+    # 07:00 CT — daily briefing (uses Anthropic if key set, static fallback otherwise).
+    # Wrapper posts the generated briefing to Discord when DISCORD_WEBHOOK_URL is set.
     scheduler.add_job(
-        jobs.generate_briefing,
+        _scheduled_briefing,
         CronTrigger(hour=7, minute=0, timezone=CT),
         id="generate_briefing",
     )

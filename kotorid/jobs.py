@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timezone
 import aiosqlite
+import httpx
 from kotorid.alerts_lib import create_alert
 from kotorid.config import DB_PATH
 from kotorid.db import get_db
@@ -468,3 +469,37 @@ async def generate_briefing():
         )
         await db.commit()
         log.info("generate_briefing: written")
+
+
+async def post_latest_briefing_to_discord(
+    db: aiosqlite.Connection, client: httpx.AsyncClient, webhook_url: str,
+) -> bool:
+    """Post today's most recent daily briefing as a large embed.
+
+    Returns True on successful post, False if no briefing exists today
+    or if the POST failed (logged).
+    """
+    cur = await db.execute(
+        "SELECT content, generated_at FROM briefings "
+        "WHERE period='daily' AND date(generated_at)=date('now') "
+        "ORDER BY id DESC LIMIT 1"
+    )
+    row = await cur.fetchone()
+    if not row:
+        return False
+    payload = {
+        "embeds": [{
+            "title": "📊 Morning Briefing",
+            "description": row["content"][:4000],  # Discord embed description limit
+            "color": 3447003,  # blue
+            "timestamp": row["generated_at"],
+            "footer": {"text": "kotori"},
+        }]
+    }
+    try:
+        resp = await client.post(webhook_url, json=payload, timeout=10.0)
+        resp.raise_for_status()
+        return True
+    except httpx.HTTPError:
+        log.exception("post_latest_briefing_to_discord: POST failed")
+        return False
