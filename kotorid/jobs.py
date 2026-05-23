@@ -141,6 +141,65 @@ async def position_monitor():
         await run_position_monitor(db)
 
 
+async def dte_check(db: aiosqlite.Connection) -> int:
+    """Emit dte_warning for any open IC expiring tomorrow.
+
+    De-duped per (symbol, today) — running multiple times the same day
+    creates at most one alert per IC.
+    """
+    from datetime import date, timedelta
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    today = date.today().isoformat()
+    cur = await db.execute(
+        "SELECT symbol, expiry, entry_credit, current_debit, contracts "
+        "FROM ic_positions WHERE exit_reason IS NULL AND expiry=?",
+        (tomorrow,),
+    )
+    rows = await cur.fetchall()
+    fired = 0
+    for ic in rows:
+        # Dedup: skip if a dte_warning already exists today for this symbol.
+        dup_cur = await db.execute(
+            "SELECT 1 FROM alerts "
+            "WHERE alert_type='dte_warning' AND symbol=? AND date(triggered_at)=?",
+            (ic["symbol"], today),
+        )
+        if await dup_cur.fetchone():
+            continue
+        debit = ic["current_debit"] or 0.0
+        entry = ic["entry_credit"] or 0.0
+        unrealized = (entry - debit) * 100 * (ic["contracts"] or 1)
+        await create_alert(
+            db,
+            alert_type="dte_warning",
+            symbol=ic["symbol"],
+            headline=f"1 Day to Expiry — {ic['symbol']}",
+            body_lines=[
+                f"Expires {ic['expiry']} (tomorrow).",
+                f"Current debit ${debit:.2f}, P/L ${unrealized:+.0f}.",
+                "Auto force_close fires day after expiry; close manually if you want a better fill.",
+            ],
+            fields={
+                "dte": 1,
+                "expiry": ic["expiry"],
+                "current_debit": debit,
+                "unrealized_pnl": unrealized,
+            },
+        )
+        fired += 1
+    if fired:
+        await db.commit()
+    return fired
+
+
+async def dte_check_job():
+    """Scheduler wrapper that opens its own DB connection."""
+    from kotorid.config import DB_PATH
+    from kotorid.db import get_db as _get_db
+    async with _get_db(DB_PATH) as db:
+        await dte_check(db)
+
+
 async def iv_ingest_morning():
     from datetime import date, timedelta
     import random

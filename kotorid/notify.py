@@ -35,6 +35,7 @@ _ALERT_STYLE = {
     "ic_placed":     ("🟢 IC Placed", _COLOR_GREEN),
     "gap_risk":      ("🟠 Gap Risk", _COLOR_ORANGE),
     "candidate_ready": ("⚠️ Candidates Ready", _COLOR_ORANGE),
+    "dte_warning":   ("⚠️ 1 Day to Expiry", _COLOR_ORANGE),
     "order_placed":  ("🟢 Order Placed", _COLOR_GREEN),  # legacy
 }
 
