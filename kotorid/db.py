@@ -38,4 +38,7 @@ async def init_db(db: aiosqlite.Connection) -> None:
     await db.executescript(schema)
     # Schema migrations for columns added after the initial release.
     await _ensure_column(db, "alerts", "notified_at", "notified_at TEXT")
+    await _ensure_column(db, "ic_positions", "order_id", "order_id TEXT")
+    await _ensure_column(db, "ic_positions", "position_warning_at", "position_warning_at TEXT")
+    await _ensure_column(db, "ic_positions", "short_strike_warned_at", "short_strike_warned_at TEXT")
     await db.commit()

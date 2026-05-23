@@ -36,7 +36,10 @@ CREATE TABLE IF NOT EXISTS ic_positions (
     exit_debit REAL,
     exit_reason TEXT,
     realized_pnl REAL,
-    agent_run_id INTEGER REFERENCES agent_runs(id)
+    agent_run_id INTEGER REFERENCES agent_runs(id),
+    order_id TEXT,
+    position_warning_at TEXT,
+    short_strike_warned_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS iv_history (
