@@ -1,7 +1,10 @@
 """Tests for refresh_ic_state — the IC monitoring producer."""
+import json
+
 import httpx
 import pytest
 
+from kotorid.alerts_lib import ALERT_FIELDS_KEY
 from kotorid.db import get_db, init_db
 from kotorid.ic_sync import refresh_ic_state
 from kotorid.tradier_client import build_client
@@ -238,3 +241,115 @@ async def test_refresh_skips_closed_ics(tmp_path):
         async with _make_client(handler) as c:
             n = await refresh_ic_state(db, c)
     assert n == 0
+
+
+def _quotes_handler_with_underlying(underlying_symbol: str, underlying_last: float):
+    """Build a Tradier /markets/quotes handler returning all 4 IC legs + the
+    underlying stock quote. Used by short_strike_threatened tests below."""
+    def handler(request):
+        if "/markets/quotes" in str(request.url):
+            return httpx.Response(200, json={
+                "quotes": {"quote": [
+                    {"symbol": "SPY260529C00760000", "bid": 0.70, "ask": 0.72},
+                    {"symbol": "SPY260529C00765000", "bid": 0.24, "ask": 0.26},
+                    {"symbol": "SPY260529P00735000", "bid": 1.50, "ask": 1.52},
+                    {"symbol": "SPY260529P00730000", "bid": 0.98, "ask": 1.00},
+                    {"symbol": underlying_symbol, "last": underlying_last,
+                     "bid": underlying_last - 0.01, "ask": underlying_last + 0.01},
+                ]}
+            })
+        raise AssertionError(f"unexpected request: {request.url}")
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_refresh_ic_state_fires_short_strike_threatened(tmp_path):
+    """Underlying within 1% of short_put → alert with structured fields."""
+    # Underlying SPY at $740, short_put=735, distance = (740-735)/735 ≈ 0.68%.
+    handler = _quotes_handler_with_underlying("SPY", 740.0)
+
+    db_path = str(tmp_path / "ic_threatened.db")
+    async with get_db(db_path) as db:
+        await init_db(db)
+        await db.execute(
+            """INSERT INTO ic_positions
+               (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
+                spread_width, entry_credit, contracts, max_loss, regime_at_entry)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ("SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
+             5.0, 1.00, 1, 400.0, "normal"),
+        )
+        await db.commit()
+        async with _make_client(handler) as c:
+            n = await refresh_ic_state(db, c)
+        assert n == 1
+
+        rows = await (await db.execute(
+            "SELECT alert_type, symbol, message FROM alerts"
+        )).fetchall()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["alert_type"] == "short_strike_threatened"
+    assert row["symbol"] == "SPY"
+    # Structured payload should be present.
+    assert ALERT_FIELDS_KEY in row["message"]
+    _, _, json_tail = row["message"].partition(ALERT_FIELDS_KEY)
+    payload = json.loads(json_tail)
+    fields = payload["fields"]
+    assert fields["short_strike"] == 735.0
+    assert fields["side"] == "put"
+    assert fields["underlying_price"] == pytest.approx(740.0)
+
+
+@pytest.mark.asyncio
+async def test_refresh_ic_state_dedup_short_strike_same_day(tmp_path):
+    """Two refreshes same day → only one short_strike_threatened alert."""
+    handler = _quotes_handler_with_underlying("SPY", 740.0)
+
+    db_path = str(tmp_path / "ic_threatened_dedup.db")
+    async with get_db(db_path) as db:
+        await init_db(db)
+        await db.execute(
+            """INSERT INTO ic_positions
+               (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
+                spread_width, entry_credit, contracts, max_loss, regime_at_entry)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ("SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
+             5.0, 1.00, 1, 400.0, "normal"),
+        )
+        await db.commit()
+        async with _make_client(handler) as c:
+            await refresh_ic_state(db, c)
+            await refresh_ic_state(db, c)
+
+        rows = await (await db.execute(
+            "SELECT alert_type FROM alerts WHERE alert_type='short_strike_threatened'"
+        )).fetchall()
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_ic_state_no_alert_when_underlying_far_from_strikes(tmp_path):
+    """Underlying comfortably between strikes → no alert."""
+    # SPY at $748, short_put=735 (distance 1.77%), short_call=760 (distance 1.58%).
+    handler = _quotes_handler_with_underlying("SPY", 748.0)
+
+    db_path = str(tmp_path / "ic_safe.db")
+    async with get_db(db_path) as db:
+        await init_db(db)
+        await db.execute(
+            """INSERT INTO ic_positions
+               (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
+                spread_width, entry_credit, contracts, max_loss, regime_at_entry)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ("SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
+             5.0, 1.00, 1, 400.0, "normal"),
+        )
+        await db.commit()
+        async with _make_client(handler) as c:
+            await refresh_ic_state(db, c)
+
+        rows = await (await db.execute(
+            "SELECT alert_type FROM alerts"
+        )).fetchall()
+    assert len(rows) == 0

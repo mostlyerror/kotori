@@ -16,10 +16,12 @@ leg), which would make profit-target / stop-loss exits fire incorrectly.
 from __future__ import annotations
 
 import logging
+from datetime import date
 
 import aiosqlite
 import httpx
 
+from kotorid.alerts_lib import create_alert
 from kotorid.position_monitor import compute_exit_debit
 from kotorid.tradier_client import format_occ_symbol, get_quotes
 
@@ -58,6 +60,93 @@ def _leg_quote(quote: dict | None) -> tuple[float, float] | None:
     return bid_f, ask_f
 
 
+def _underlying_price(quote: dict | None) -> float | None:
+    """Extract a usable underlying price from a Tradier stock quote.
+
+    Prefers ``last`` (the trade print) over ``bid``/``ask`` so we measure
+    distance-to-strike against where the market actually is, not where it
+    *could* trade. Falls back to bid/ask for after-hours rows where last
+    may be stale.
+    """
+    if not quote:
+        return None
+    for k in ("last", "bid", "ask"):
+        v = quote.get(k)
+        if v is None:
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+async def _maybe_fire_short_strike_threatened(
+    db: aiosqlite.Connection,
+    ic: aiosqlite.Row,
+    quotes: dict[str, dict],
+    debit: float,
+) -> None:
+    """Emit short_strike_threatened if underlying is within 1% of a short.
+
+    Deduped once-per-day via ``ic_positions.short_strike_warned_at``. We
+    cap the alert frequency because the underlying can hover near a strike
+    for hours and we don't want a notification storm — one well-formed
+    Discord ping per day per IC is enough to get the trader's eyes on it.
+    """
+    today_iso = date.today().isoformat()
+
+    warned_cur = await db.execute(
+        "SELECT short_strike_warned_at FROM ic_positions WHERE id=?",
+        (ic["id"],),
+    )
+    warned_row = await warned_cur.fetchone()
+    if warned_row and warned_row[0] == today_iso:
+        return
+
+    underlying_price = _underlying_price(quotes.get(ic["symbol"]))
+    if underlying_price is None:
+        return
+
+    short_put = float(ic["short_put"])
+    short_call = float(ic["short_call"])
+    threatened_side: str | None = None
+    threatened_strike: float | None = None
+    if abs(underlying_price - short_put) / short_put <= 0.01:
+        threatened_side = "put"
+        threatened_strike = short_put
+    elif abs(underlying_price - short_call) / short_call <= 0.01:
+        threatened_side = "call"
+        threatened_strike = short_call
+
+    if threatened_side is None:
+        return
+
+    distance_pct = (underlying_price - threatened_strike) / threatened_strike
+    await create_alert(
+        db,
+        alert_type="short_strike_threatened",
+        symbol=ic["symbol"],
+        headline=f"Short Strike Threatened — {ic['symbol']}",
+        body_lines=[
+            f"{ic['symbol']} at ${underlying_price:.2f}, "
+            f"{distance_pct:+.2%} from short {threatened_side} {threatened_strike:.0f}.",
+            f"Current debit ${debit:.2f}; if the strike breaches, the IC may stop out.",
+        ],
+        fields={
+            "underlying_price": underlying_price,
+            "short_strike": threatened_strike,
+            "side": threatened_side,
+            "distance_pct": distance_pct,
+            "current_debit": debit,
+        },
+    )
+    await db.execute(
+        "UPDATE ic_positions SET short_strike_warned_at=? WHERE id=?",
+        (today_iso, ic["id"]),
+    )
+
+
 async def refresh_ic_state(
     db: aiosqlite.Connection, client: httpx.AsyncClient
 ) -> int:
@@ -88,6 +177,9 @@ async def refresh_ic_state(
             per_ic[k] = sym
             all_symbols.add(sym)
         occ_for[ic["id"]] = per_ic
+        # Include the underlying stock symbol so short_strike_threatened can
+        # compare it against the short strikes without a second HTTP round-trip.
+        all_symbols.add(ic["symbol"])
 
     quotes = await get_quotes(client, sorted(all_symbols))
 
@@ -120,6 +212,8 @@ async def refresh_ic_state(
             (debit, pct_max_profit, ic["id"]),
         )
         refreshed += 1
+
+        await _maybe_fire_short_strike_threatened(db, ic, quotes, debit)
 
     await db.commit()
     log.info("refresh_ic_state: refreshed %d IC(s)", refreshed)

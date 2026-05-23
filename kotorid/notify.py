@@ -37,6 +37,7 @@ _ALERT_STYLE = {
     "candidate_ready": ("⚠️ Candidates Ready", _COLOR_ORANGE),
     "dte_warning":   ("⚠️ 1 Day to Expiry", _COLOR_ORANGE),
     "position_warning": ("⚠️ Position Warning", _COLOR_ORANGE),
+    "short_strike_threatened": ("🚨 Short Strike Threatened", _COLOR_RED),
     "order_placed":  ("🟢 Order Placed", _COLOR_GREEN),  # legacy
 }
 
