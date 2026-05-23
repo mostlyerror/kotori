@@ -69,6 +69,7 @@ async def _materialize_ic_position(
     db: aiosqlite.Connection,
     candidate: aiosqlite.Row,
     expiry: str,
+    order_id: str | None = None,
 ) -> None:
     """Insert an ic_positions row mirroring a placed candidate."""
     spread_width = float(candidate["long_call"]) - float(candidate["short_call"])
@@ -76,15 +77,16 @@ async def _materialize_ic_position(
     await db.execute(
         """INSERT INTO ic_positions
            (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
-            spread_width, entry_credit, contracts, max_loss, regime_at_entry, agent_run_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            spread_width, entry_credit, contracts, max_loss, regime_at_entry,
+            agent_run_id, order_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             candidate["symbol"], date.today().isoformat(), expiry,
             float(candidate["short_call"]), float(candidate["long_call"]),
             float(candidate["short_put"]), float(candidate["long_put"]),
             spread_width, float(candidate["expected_credit"]),
             contracts, float(candidate["max_loss"]), "normal",
-            candidate["agent_run_id"],
+            candidate["agent_run_id"], order_id,
         ),
     )
 
@@ -151,14 +153,14 @@ async def place_approved_candidates(
         await db.execute(
             "UPDATE candidates SET order_status='placed' WHERE id=?", (cand["id"],)
         )
-        await _materialize_ic_position(db, cand, expiry)
+        order_id_str = str(order_resp.get("order", {}).get("id", "")) or None
+        await _materialize_ic_position(db, cand, expiry, order_id=order_id_str)
         await db.execute(
             """UPDATE inbox_items
                SET dismissed_at=?
                WHERE item_type='ic_candidate' AND symbol=? AND dismissed_at IS NULL""",
             (now_iso, cand["symbol"]),
         )
-        order_id_str = str(order_resp.get("order", {}).get("id", "")) or "?"
         await create_alert(
             db,
             alert_type="ic_placed",

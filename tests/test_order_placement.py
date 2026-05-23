@@ -262,3 +262,26 @@ async def test_ic_placed_alert_is_structured(tmp_path):
     assert fields["expiry"] == "2026-05-29"
     assert fields["expected_credit"] == pytest.approx(1.00)
     assert fields["max_loss"] == pytest.approx(400.0)
+
+
+@pytest.mark.asyncio
+async def test_materialize_ic_position_stores_order_id(tmp_path):
+    """When Tradier returns order id 12345, ic_positions.order_id == '12345'."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and "/orders" in request.url.path:
+            return httpx.Response(200, json={"order": {"id": 12345, "status": "ok"}})
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    db_path = str(tmp_path / "orderid.db")
+    async with get_db(db_path) as db:
+        await init_db(db)
+        await _seed_one_approved_candidate(db, symbol="SPY", expiry="2026-05-29")
+        async with _make_client(handler) as c:
+            placed = await place_approved_candidates(db, c, "ACCT-X")
+        assert len(placed) == 1
+
+        ic = await (await db.execute(
+            "SELECT order_id FROM ic_positions WHERE symbol='SPY'"
+        )).fetchone()
+        assert ic is not None
+        assert ic["order_id"] == "12345"
