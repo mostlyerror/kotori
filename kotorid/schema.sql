@@ -124,7 +124,8 @@ CREATE TABLE IF NOT EXISTS alerts (
     alert_type TEXT NOT NULL,
     message TEXT NOT NULL,
     triggered_at TEXT NOT NULL,
-    acknowledged INTEGER NOT NULL DEFAULT 0
+    acknowledged INTEGER NOT NULL DEFAULT 0,
+    notified_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS inbox_items (

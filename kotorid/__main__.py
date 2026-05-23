@@ -17,9 +17,12 @@ from kotorid.config import DB_PATH, TRADIER_API_KEY
 from kotorid.db import get_db, init_db
 from kotorid.ic_sync import refresh_ic_state
 from kotorid.mock_data import seed_mock_data
+from kotorid.notify import notify_pending_alerts, webhook_url
 from kotorid.position_sync import sync_positions
 from kotorid.tradier_client import build_client, get_account_id
 from kotorid import jobs
+
+import httpx
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -90,6 +93,19 @@ async def _scheduled_candidate_scan():
         log.exception("scheduled candidate_scan failed")
 
 
+async def _scheduled_notify_alerts():
+    """Recurring job: post unnotified alerts to Discord."""
+    url = webhook_url()
+    if not url:
+        return
+    try:
+        async with get_db(DB_PATH) as db:
+            async with httpx.AsyncClient() as client:
+                await notify_pending_alerts(db, client, url)
+    except Exception:
+        log.exception("scheduled notify_alerts failed")
+
+
 async def run():
     await ensure_db()
 
@@ -109,6 +125,16 @@ async def run():
     )
     # Every 30s — position monitor (consumes ic_positions.current_debit)
     scheduler.add_job(jobs.position_monitor, "interval", seconds=30, id="position_monitor")
+
+    # Every 30s — Discord notifier (no-ops when DISCORD_WEBHOOK_URL is unset)
+    if webhook_url():
+        scheduler.add_job(
+            _scheduled_notify_alerts,
+            "interval",
+            seconds=30,
+            id="notify_alerts",
+        )
+        log.info("notify_alerts: Discord webhook configured, notifications enabled")
 
     # Live API jobs — only when TRADIER_API_KEY is set.
     if TRADIER_API_KEY:

@@ -32,6 +32,7 @@ to Tradier. Railway's Hobby plan ($5/mo) is right-sized.
    | `TRADIER_ACCOUNT_ID` | your account number (e.g. `VA46630435`) | required; skips a `/user/profile` call |
    | `ANTHROPIC_API_KEY` | your Claude key | optional; enables AI briefings |
    | `KOTORI_WATCHLIST` | `SPY,QQQ,META,...` | optional; defaults to the 10 names in `candidate_scan.DEFAULT_WATCHLIST` |
+   | `DISCORD_WEBHOOK_URL` | `https://discord.com/api/webhooks/<id>/<token>` | optional; enables Discord push notifications for alerts |
    | `KOTORI_DB` | `/data/kotori.db` | **leave the default** — matches the volume mount |
 
    Do **not** set `KOTORI_SEED_MOCK` in production. It enables demo
@@ -70,6 +71,26 @@ to Tradier. Railway's Hobby plan ($5/mo) is right-sized.
   `railway logs --tail 100 | grep -E 'profit_target|stop_loss|ic_placed|force_close'`
   catches the events that matter.
 
+## Discord notifications (optional)
+
+When `DISCORD_WEBHOOK_URL` is set, the daemon posts every new alert to
+the configured channel as a colored embed (green for profit_target,
+red for stop_loss, blue for force_close, etc.). Polled from the
+`alerts` table every 30s — decoupled from alert writing, so a Discord
+outage doesn't affect local alerting.
+
+To set it up:
+
+1. In Discord: Server Settings → Integrations → Webhooks → New
+   Webhook. Pick a channel. Copy the webhook URL.
+2. In Railway: Service → Variables → set
+   `DISCORD_WEBHOOK_URL=<the URL>`.
+3. The redeploy registers the `notify_alerts` job. Watch for the
+   startup log line `notify_alerts: Discord webhook configured`.
+
+The webhook URL is the credential — treat it as secret, never log it,
+never commit it. If it leaks, regenerate from the Discord UI.
+
 ## Open follow-ups
 
 - **TUI access.** Daemon writes to `/data/kotori.db` on Railway, but
@@ -78,10 +99,6 @@ to Tradier. Railway's Hobby plan ($5/mo) is right-sized.
   Postgres so both can hit the same remote DB; (b) one-way replicate
   with `litestream`; (c) ship the TUI as a textual-serve web app on
   the same Railway service.
-- **Notifications.** No SMS/email/push integration yet. Alerts only
-  live in SQLite + the inbox; without the TUI you only see them in
-  logs. A Discord/Slack webhook or Twilio integration would close
-  this gap.
 - **`entry_credit` precision.** Currently set from pre-trade mid
   prices in the candidate scan. After fill, a post-fill order detail
   query (`/accounts/{id}/orders/{order_id}`) would give actual fill
