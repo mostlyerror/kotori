@@ -2,7 +2,7 @@
 
 A portfolio companion for options traders running iron condors.
 
-## Run
+## Run locally
 
 ```bash
 pip install -e .
@@ -12,6 +12,12 @@ kotori                # TUI
 ```
 
 Requires Python 3.13+. Data lives at `~/.kotori/kotori.db` (override with `KOTORI_DB`).
+
+## Deploy 24/7
+
+The daemon needs to run continuously to monitor open ICs and fire exit
+triggers. Sleeping laptops miss events. See [docs/DEPLOY.md](docs/DEPLOY.md)
+for Railway deployment (Dockerfile + persistent volume + env vars).
 
 ## What works live
 

@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 import aiosqlite
 
-SCHEMA_PATH = Path(__file__).parent.parent / "db" / "schema.sql"
+SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 
 @asynccontextmanager
