@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timezone
 import aiosqlite
+from kotorid.alerts_lib import create_alert
 from kotorid.config import DB_PATH
 from kotorid.db import get_db
 from kotorid.position_monitor import check_exit_trigger
@@ -28,12 +29,26 @@ async def run_position_monitor(db: aiosqlite.Connection) -> list[dict]:
             "UPDATE ic_positions SET exit_reason=?, exit_debit=?, realized_pnl=? WHERE id=?",
             (reason, ic["current_debit"], realized_pnl, ic["id"])
         )
-        await db.execute(
-            """INSERT INTO alerts (symbol, alert_type, message, triggered_at)
-               VALUES (?,?,?,?)""",
-            (ic["symbol"], reason,
-             f"{ic['symbol']} IC: {reason.replace('_',' ')} — P&L ${realized_pnl:+.0f}",
-             now)
+        reason_label = "Stop Loss" if reason == "stop_loss" else "Profit Target"
+        pnl_sign = "-" if realized_pnl < 0 else "+"
+        await create_alert(
+            db,
+            alert_type=reason,
+            symbol=ic["symbol"],
+            headline=f"{reason_label} — {ic['symbol']}",
+            body_lines=[
+                f"Closed at debit ${ic['current_debit']:.2f} (entry credit ${ic['entry_credit']:.2f}).",
+                f"Realized P/L: {pnl_sign}${abs(realized_pnl):.0f}.",
+                f"{'Loss' if realized_pnl < 0 else 'Gain'} captured at "
+                f"{abs(realized_pnl/100/ic['entry_credit']):.0%} of entry credit.",
+            ],
+            fields={
+                "entry_credit": float(ic["entry_credit"]),
+                "exit_debit": float(ic["current_debit"]),
+                "realized_pnl": realized_pnl,
+                "contracts": ic["contracts"],
+            },
+            triggered_at=now,
         )
         await db.execute(
             """INSERT INTO inbox_items

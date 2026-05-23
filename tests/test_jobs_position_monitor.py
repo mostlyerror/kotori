@@ -1,6 +1,8 @@
+import json
 from datetime import date, timedelta
 
 import pytest
+from kotorid.alerts_lib import ALERT_FIELDS_KEY
 from kotorid.db import get_db, init_db
 from kotorid.mock_data import seed_mock_data
 from kotorid.jobs import run_position_monitor
@@ -143,3 +145,41 @@ async def test_force_close_leaves_pnl_null_when_debit_missing(tmp_path):
     assert row["exit_reason"] == "force_close"
     assert row["exit_debit"] is None
     assert row["realized_pnl"] is None
+
+
+@pytest.mark.asyncio
+async def test_stop_loss_alert_has_structured_content(tmp_path):
+    db_path = str(tmp_path / "kotori.db")
+    async with get_db(db_path) as db:
+        await init_db(db)
+        # IC entered at $1.00 credit, current debit $2.10 = stop_loss territory
+        await db.execute(
+            """INSERT INTO ic_positions
+               (symbol, entry_date, expiry, short_call, long_call,
+                short_put, long_put, spread_width, entry_credit,
+                contracts, max_loss, current_debit)
+               VALUES ('SPY','2026-05-22','2026-05-29',
+                       760,765,735,730,5,1.00,1,400,2.10)"""
+        )
+        await db.commit()
+
+        await run_position_monitor(db)
+
+        cur = await db.execute(
+            "SELECT message FROM alerts WHERE alert_type='stop_loss'"
+        )
+        row = await cur.fetchone()
+
+    assert row is not None
+    assert ALERT_FIELDS_KEY in row["message"]
+    plain, _, json_tail = row["message"].partition(ALERT_FIELDS_KEY)
+    payload = json.loads(json_tail)
+    fields = payload["fields"]
+    assert fields["entry_credit"] == 1.00
+    assert fields["exit_debit"] == 2.10
+    assert fields["realized_pnl"] == pytest.approx(-110.0)  # (1.00-2.10)*100*1
+    # Body lines must explain *why*
+    body = "\n".join(payload["body_lines"])
+    assert "$1.00" in body  # entry credit
+    assert "$2.10" in body  # exit debit
+    assert "-$110" in body or "−$110" in body  # realized loss
