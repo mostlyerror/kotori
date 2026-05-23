@@ -142,6 +142,28 @@ async def _scheduled_heartbeat():
         log.exception("scheduled heartbeat failed")
 
 
+async def _scheduled_dte_check():
+    try:
+        async with get_db(DB_PATH) as db:
+            await jobs.dte_check(db)
+    except Exception:
+        log.exception("scheduled dte_check failed")
+
+
+async def _scheduled_order_status_check():
+    """Poll Tradier for unresolved order status; one-shot per call."""
+    if not TRADIER_API_KEY:
+        return
+    try:
+        async with get_db(DB_PATH) as db:
+            async with build_client() as client:
+                account_id = await get_account_id(client)
+                from kotorid.order_status import check_open_orders
+                await check_open_orders(db, client, account_id)
+    except Exception:
+        log.exception("scheduled order_status_check failed")
+
+
 async def run():
     await ensure_db()
 
@@ -159,6 +181,18 @@ async def run():
         _scheduled_briefing,
         CronTrigger(hour=7, minute=0, timezone=CT),
         id="generate_briefing",
+    )
+    # 09:00 CT — DTE warning sweep (1 day to expiry heads-up)
+    scheduler.add_job(
+        _scheduled_dte_check,
+        CronTrigger(hour=9, minute=0, timezone=CT),
+        id="dte_check",
+    )
+    # 15:30 CT — EOD recap, weekdays only
+    scheduler.add_job(
+        jobs.eod_recap_job,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=30, timezone=CT),
+        id="eod_recap",
     )
     # Every 30s — position monitor (consumes ic_positions.current_debit)
     scheduler.add_job(jobs.position_monitor, "interval", seconds=30, id="position_monitor")
@@ -201,6 +235,13 @@ async def run():
             "interval",
             seconds=60,
             id="ic_refresh",
+        )
+        # Every 90s — poll Tradier for order status (cheap, no-op when no open orders)
+        scheduler.add_job(
+            _scheduled_order_status_check,
+            "interval",
+            seconds=90,
+            id="order_status_check",
         )
         # 14:30 CT — daily IC candidate scan against the watchlist
         scheduler.add_job(
