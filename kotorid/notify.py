@@ -39,6 +39,8 @@ _ALERT_STYLE = {
     "position_warning": ("⚠️ Position Warning", _COLOR_ORANGE),
     "short_strike_threatened": ("🚨 Short Strike Threatened", _COLOR_RED),
     "order_placed":  ("🟢 Order Placed", _COLOR_GREEN),  # legacy
+    "order_filled":  ("🟢 Order Filled", _COLOR_GREEN),
+    "order_failed":  ("⚠️ Order Failed", _COLOR_ORANGE),
 }
 
 
