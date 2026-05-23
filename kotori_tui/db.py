@@ -49,3 +49,65 @@ async def get_unread_alert_count() -> int:
 async def get_inbox_count() -> int:
     rows = await query("SELECT COUNT(*) as n FROM inbox_items WHERE dismissed_at IS NULL")
     return rows[0]["n"]
+
+
+async def get_open_ics() -> list[dict]:
+    """Open ICs (exit_reason IS NULL) with current monitoring state."""
+    return await query(
+        """SELECT id, symbol, entry_date, expiry, short_call, long_call,
+                  short_put, long_put, entry_credit, current_debit,
+                  pct_max_profit, contracts, max_loss
+           FROM ic_positions
+           WHERE exit_reason IS NULL
+           ORDER BY expiry, symbol"""
+    )
+
+
+async def get_closed_ics() -> list[dict]:
+    """Closed ICs with realized P&L for performance review."""
+    return await query(
+        """SELECT id, symbol, entry_date, expiry, exit_reason, exit_debit,
+                  entry_credit, realized_pnl, contracts, max_loss
+           FROM ic_positions
+           WHERE exit_reason IS NOT NULL
+           ORDER BY expiry DESC, symbol"""
+    )
+
+
+async def get_strategy_stats() -> dict:
+    """Aggregate IC strategy performance.
+
+    open_count / closed_count, total_realized_pnl, win_rate (% of closed
+    with positive P&L; NULL realized_pnl is excluded from the denominator
+    because we can't classify it as win/loss), unrealized_pnl (sum of
+    (entry_credit - current_debit) * 100 * contracts for open ICs that
+    have a current_debit).
+    """
+    rows = await query(
+        """SELECT
+              SUM(CASE WHEN exit_reason IS NULL THEN 1 ELSE 0 END) AS open_count,
+              SUM(CASE WHEN exit_reason IS NOT NULL THEN 1 ELSE 0 END) AS closed_count,
+              SUM(CASE WHEN exit_reason IS NOT NULL AND realized_pnl IS NOT NULL
+                       THEN realized_pnl ELSE 0 END) AS total_realized_pnl,
+              SUM(CASE WHEN exit_reason IS NOT NULL AND realized_pnl IS NOT NULL
+                       THEN 1 ELSE 0 END) AS pnl_known_count,
+              SUM(CASE WHEN exit_reason IS NOT NULL AND realized_pnl > 0
+                       THEN 1 ELSE 0 END) AS wins,
+              SUM(CASE WHEN exit_reason IS NULL AND current_debit IS NOT NULL
+                       THEN (entry_credit - current_debit) * 100 * contracts
+                       ELSE 0 END) AS unrealized_pnl
+           FROM ic_positions"""
+    )
+    r = rows[0] if rows else {}
+    open_count = r.get("open_count") or 0
+    closed_count = r.get("closed_count") or 0
+    pnl_known = r.get("pnl_known_count") or 0
+    wins = r.get("wins") or 0
+    return {
+        "open_count": open_count,
+        "closed_count": closed_count,
+        "total_realized_pnl": float(r.get("total_realized_pnl") or 0),
+        "unrealized_pnl": float(r.get("unrealized_pnl") or 0),
+        "win_rate": (wins / pnl_known) if pnl_known else None,
+        "pnl_known_count": pnl_known,
+    }

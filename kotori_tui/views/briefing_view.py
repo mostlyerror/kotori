@@ -101,6 +101,7 @@ class BriefingView(Widget):
         Binding("enter", "open_detail", "Detail", show=True),
         Binding("a", "approve_candidate", "Approve", show=True),
         Binding("r", "reject_candidate", "Reject", show=True),
+        Binding("p", "open_strategy", "Strategy", show=True),
     ]
 
     def compose(self) -> ComposeResult:
@@ -247,6 +248,11 @@ class BriefingView(Widget):
 
         # Trigger a refresh so the new IC + dismissed card flow into the view.
         self.refresh_data()
+
+    def action_open_strategy(self) -> None:
+        """Open the aggregate IC strategy performance view."""
+        from kotori_tui.screens.strategy_view import StrategyView
+        self.app.push_screen(StrategyView())
 
     @work(exclusive=True)
     async def action_reject_candidate(self) -> None:
