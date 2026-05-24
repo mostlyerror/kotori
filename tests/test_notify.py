@@ -2,7 +2,6 @@
 import httpx
 import pytest
 
-from kotorid.db import get_db, init_db
 from kotorid.notify import format_alert_embed, notify_pending_alerts, webhook_url
 
 
@@ -75,65 +74,57 @@ def _capture_handler(captured: list):
 
 
 @pytest.mark.asyncio
-async def test_notify_pending_alerts_posts_and_marks(tmp_path):
+async def test_notify_pending_alerts_posts_and_marks(conn):
     """Every unnotified alert gets POSTed and marked notified_at."""
     captured: list = []
-    db_path = str(tmp_path / "notify.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        await db.execute(
-            """INSERT INTO alerts (symbol, alert_type, message, triggered_at)
-               VALUES (?,?,?,?)""",
-            ("SPY", "profit_target", "P&L $+50", "2026-05-23T19:00:00+00:00"),
-        )
-        await db.execute(
-            """INSERT INTO alerts (symbol, alert_type, message, triggered_at)
-               VALUES (?,?,?,?)""",
-            ("QQQ", "stop_loss", "P&L $-200", "2026-05-23T19:01:00+00:00"),
-        )
-        await db.commit()
+    await conn.execute(
+        """INSERT INTO alerts (symbol, alert_type, message, triggered_at)
+           VALUES ($1,$2,$3,$4)""",
+        "SPY", "profit_target", "P&L $+50", "2026-05-23T19:00:00+00:00",
+    )
+    await conn.execute(
+        """INSERT INTO alerts (symbol, alert_type, message, triggered_at)
+           VALUES ($1,$2,$3,$4)""",
+        "QQQ", "stop_loss", "P&L $-200", "2026-05-23T19:01:00+00:00",
+    )
 
-        transport = httpx.MockTransport(_capture_handler(captured))
-        async with httpx.AsyncClient(transport=transport) as client:
-            sent = await notify_pending_alerts(
-                db, client, "https://discord.com/api/webhooks/X/Y"
-            )
-        assert sent == 2
-        assert len(captured) == 2
-        assert all(c["url"] == "https://discord.com/api/webhooks/X/Y" for c in captured)
+    transport = httpx.MockTransport(_capture_handler(captured))
+    async with httpx.AsyncClient(transport=transport) as client:
+        sent = await notify_pending_alerts(
+            conn, client, "https://discord.com/api/webhooks/X/Y"
+        )
+    assert sent == 2
+    assert len(captured) == 2
+    assert all(c["url"] == "https://discord.com/api/webhooks/X/Y" for c in captured)
 
-        notified_count = await (await db.execute(
-            "SELECT COUNT(*) AS n FROM alerts WHERE notified_at IS NOT NULL"
-        )).fetchone()
-        assert notified_count["n"] == 2
+    notified_count = await conn.fetchval(
+        "SELECT COUNT(*) FROM alerts WHERE notified_at IS NOT NULL"
+    )
+    assert notified_count == 2
 
 
 @pytest.mark.asyncio
-async def test_notify_pending_alerts_skips_already_notified(tmp_path):
+async def test_notify_pending_alerts_skips_already_notified(conn):
     """Alerts with notified_at set don't get re-posted."""
     captured: list = []
-    db_path = str(tmp_path / "skip.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        await db.execute(
-            """INSERT INTO alerts (symbol, alert_type, message, triggered_at, notified_at)
-               VALUES (?,?,?,?,?)""",
-            ("SPY", "profit_target", "P&L $+50",
-             "2026-05-23T19:00:00+00:00", "2026-05-23T19:00:30+00:00"),
-        )
-        await db.commit()
+    await conn.execute(
+        """INSERT INTO alerts (symbol, alert_type, message, triggered_at, notified_at)
+           VALUES ($1,$2,$3,$4,$5)""",
+        "SPY", "profit_target", "P&L $+50",
+        "2026-05-23T19:00:00+00:00", "2026-05-23T19:00:30+00:00",
+    )
 
-        transport = httpx.MockTransport(_capture_handler(captured))
-        async with httpx.AsyncClient(transport=transport) as client:
-            sent = await notify_pending_alerts(
-                db, client, "https://discord.com/api/webhooks/X/Y"
-            )
-        assert sent == 0
-        assert captured == []
+    transport = httpx.MockTransport(_capture_handler(captured))
+    async with httpx.AsyncClient(transport=transport) as client:
+        sent = await notify_pending_alerts(
+            conn, client, "https://discord.com/api/webhooks/X/Y"
+        )
+    assert sent == 0
+    assert captured == []
 
 
 @pytest.mark.asyncio
-async def test_notify_pending_alerts_continues_on_single_post_failure(tmp_path):
+async def test_notify_pending_alerts_continues_on_single_post_failure(conn):
     """If Discord returns 500 on one alert, that alert stays unnotified,
     but the next alert still gets posted."""
     def flaky_handler(request: httpx.Request) -> httpx.Response:
@@ -142,34 +133,30 @@ async def test_notify_pending_alerts_continues_on_single_post_failure(tmp_path):
             return httpx.Response(500, text="discord ate it")
         return httpx.Response(204)
 
-    db_path = str(tmp_path / "flaky.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        await db.execute(
-            """INSERT INTO alerts (symbol, alert_type, message, triggered_at)
-               VALUES (?,?,?,?)""",
-            ("SPY", "profit_target", "this will fail",
-             "2026-05-23T19:00:00+00:00"),
-        )
-        await db.execute(
-            """INSERT INTO alerts (symbol, alert_type, message, triggered_at)
-               VALUES (?,?,?,?)""",
-            ("QQQ", "stop_loss", "this will succeed",
-             "2026-05-23T19:01:00+00:00"),
-        )
-        await db.commit()
+    await conn.execute(
+        """INSERT INTO alerts (symbol, alert_type, message, triggered_at)
+           VALUES ($1,$2,$3,$4)""",
+        "SPY", "profit_target", "this will fail",
+        "2026-05-23T19:00:00+00:00",
+    )
+    await conn.execute(
+        """INSERT INTO alerts (symbol, alert_type, message, triggered_at)
+           VALUES ($1,$2,$3,$4)""",
+        "QQQ", "stop_loss", "this will succeed",
+        "2026-05-23T19:01:00+00:00",
+    )
 
-        transport = httpx.MockTransport(flaky_handler)
-        async with httpx.AsyncClient(transport=transport) as client:
-            sent = await notify_pending_alerts(
-                db, client, "https://discord.com/api/webhooks/X/Y"
-            )
-        assert sent == 1  # only the QQQ one made it
+    transport = httpx.MockTransport(flaky_handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        sent = await notify_pending_alerts(
+            conn, client, "https://discord.com/api/webhooks/X/Y"
+        )
+    assert sent == 1  # only the QQQ one made it
 
-        rows = await (await db.execute(
-            "SELECT symbol, notified_at FROM alerts ORDER BY symbol"
-        )).fetchall()
-        by_symbol = {r["symbol"]: r["notified_at"] for r in rows}
+    rows = await conn.fetch(
+        "SELECT symbol, notified_at FROM alerts ORDER BY symbol"
+    )
+    by_symbol = {r["symbol"]: r["notified_at"] for r in rows}
     assert by_symbol["QQQ"] is not None
     assert by_symbol["SPY"] is None  # left for retry on next cycle
 

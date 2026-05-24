@@ -1,23 +1,16 @@
-"""Heartbeat: a one-line state digest posted to Discord every 15 min.
-
-Heartbeats are state snapshots, not events. They bypass the ``alerts``
-table and post directly through ``post_heartbeat``. The whole point is
-that a quiet period still produces predictable, scannable lines so the
-user knows the system is alive.
-"""
+"""Heartbeat: a one-line state digest posted to Discord every 15 min."""
 from __future__ import annotations
 
 import logging
 from datetime import date
 
-import aiosqlite
+import asyncpg
 import httpx
 
 log = logging.getLogger(__name__)
 
 
 def _short_expiry(iso: str) -> str:
-    """Render '2026-05-29' as '5/29'."""
     try:
         y, m, d = iso.split("-")
         return f"{int(m)}/{int(d)}"
@@ -26,14 +19,12 @@ def _short_expiry(iso: str) -> str:
 
 
 async def build_heartbeat_line(
-    db: aiosqlite.Connection, *, now_ct_label: str,
+    conn: asyncpg.Connection, *, now_ct_label: str,
 ) -> str:
-    """Build the one-line heartbeat string from current DB state."""
-    cur = await db.execute(
+    open_ics = await conn.fetch(
         "SELECT symbol, expiry, entry_credit, current_debit, contracts "
         "FROM ic_positions WHERE exit_reason IS NULL"
     )
-    open_ics = await cur.fetchall()
 
     parts: list[str] = [f"ℹ️  {now_ct_label}"]
     parts.append(f"{len(open_ics)} IC{'s' if len(open_ics) != 1 else ''}")
@@ -53,12 +44,10 @@ async def build_heartbeat_line(
         else:
             parts.append(f"{sym} {exp} debit ?")
 
-    # Last scan outcome (today's candidates row count)
-    scan_cur = await db.execute(
-        "SELECT COUNT(*) FROM candidates WHERE scan_date=?",
-        (date.today().isoformat(),),
+    today_candidates = await conn.fetchval(
+        "SELECT COUNT(*) FROM candidates WHERE scan_date=$1",
+        date.today().isoformat(),
     )
-    (today_candidates,) = await scan_cur.fetchone()
     if today_candidates > 0:
         parts.append(f"scan: {today_candidates} candidate(s) today")
     else:
@@ -70,11 +59,10 @@ async def build_heartbeat_line(
 async def post_heartbeat(
     client: httpx.AsyncClient, webhook_url: str, line: str,
 ) -> bool:
-    """POST the heartbeat as a low-color embed; return True on success."""
     payload = {
         "embeds": [{
             "description": line,
-            "color": 9807270,  # gray, distinct from event colors
+            "color": 9807270,
             "footer": {"text": "kotori heartbeat"},
         }]
     }

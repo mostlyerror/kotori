@@ -18,7 +18,7 @@ import json
 import logging
 from datetime import date, datetime, timezone
 
-import aiosqlite
+import asyncpg
 import httpx
 
 from kotorid.alerts_lib import create_alert
@@ -66,33 +66,31 @@ async def place_iron_condor(
 
 
 async def _materialize_ic_position(
-    db: aiosqlite.Connection,
-    candidate: aiosqlite.Row,
+    conn: asyncpg.Connection,
+    candidate: asyncpg.Record,
     expiry: str,
     order_id: str | None = None,
 ) -> None:
     """Insert an ic_positions row mirroring a placed candidate."""
     spread_width = float(candidate["long_call"]) - float(candidate["short_call"])
     contracts = candidate["contracts"] or 1
-    await db.execute(
+    await conn.execute(
         """INSERT INTO ic_positions
            (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
             spread_width, entry_credit, contracts, max_loss, regime_at_entry,
             agent_run_id, order_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            candidate["symbol"], date.today().isoformat(), expiry,
-            float(candidate["short_call"]), float(candidate["long_call"]),
-            float(candidate["short_put"]), float(candidate["long_put"]),
-            spread_width, float(candidate["expected_credit"]),
-            contracts, float(candidate["max_loss"]), "normal",
-            candidate["agent_run_id"], order_id,
-        ),
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
+        candidate["symbol"], date.today().isoformat(), expiry,
+        float(candidate["short_call"]), float(candidate["long_call"]),
+        float(candidate["short_put"]), float(candidate["long_put"]),
+        spread_width, float(candidate["expected_credit"]),
+        contracts, float(candidate["max_loss"]), "normal",
+        candidate["agent_run_id"], order_id,
     )
 
 
 async def place_approved_candidates(
-    db: aiosqlite.Connection,
+    conn: asyncpg.Connection,
     client: httpx.AsyncClient,
     account_id: str,
 ) -> list[dict]:
@@ -105,7 +103,7 @@ async def place_approved_candidates(
 
     Returns the list of placed candidates (each as a dict).
     """
-    cur = await db.execute(
+    approved = await conn.fetch(
         """SELECT c.id, c.symbol, c.scan_date, c.agent_run_id,
                   c.short_call, c.long_call, c.short_put, c.long_put,
                   c.expected_credit, c.contracts, c.max_loss,
@@ -114,7 +112,6 @@ async def place_approved_candidates(
            LEFT JOIN agent_runs ar ON c.agent_run_id = ar.id
            WHERE c.order_status='approved'"""
     )
-    approved = await cur.fetchall()
     placed: list[dict] = []
     now_iso = datetime.now(tz=timezone.utc).isoformat()
 
@@ -150,19 +147,19 @@ async def place_approved_candidates(
             continue
 
         # On Tradier success, transition candidate, write IC, dismiss inbox card.
-        await db.execute(
-            "UPDATE candidates SET order_status='placed' WHERE id=?", (cand["id"],)
+        await conn.execute(
+            "UPDATE candidates SET order_status='placed' WHERE id=$1", cand["id"],
         )
         order_id_str = str(order_resp.get("order", {}).get("id", "")) or None
-        await _materialize_ic_position(db, cand, expiry, order_id=order_id_str)
-        await db.execute(
+        await _materialize_ic_position(conn, cand, expiry, order_id=order_id_str)
+        await conn.execute(
             """UPDATE inbox_items
-               SET dismissed_at=?
-               WHERE item_type='ic_candidate' AND symbol=? AND dismissed_at IS NULL""",
-            (now_iso, cand["symbol"]),
+               SET dismissed_at=$1
+               WHERE item_type='ic_candidate' AND symbol=$2 AND dismissed_at IS NULL""",
+            now_iso, cand["symbol"],
         )
         await create_alert(
-            db,
+            conn,
             alert_type="ic_placed",
             symbol=cand["symbol"],
             headline=f"Order Placed — {cand['symbol']}",
@@ -190,6 +187,5 @@ async def place_approved_candidates(
             "order_id": order_resp.get("order", {}).get("id"),
         })
 
-    await db.commit()
     log.info("place_approved_candidates: placed %d order(s)", len(placed))
     return placed

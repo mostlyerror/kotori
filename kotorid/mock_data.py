@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 import json
-import aiosqlite
+import asyncpg
 import random
 
 NOW = lambda: datetime.now(tz=timezone.utc).isoformat()
@@ -8,17 +8,16 @@ TODAY = date.today().isoformat()
 EXPIRY_3D = (date.today() + timedelta(days=3)).isoformat()
 
 
-async def seed_mock_data(db: aiosqlite.Connection) -> None:
-    cursor = await db.execute("SELECT COUNT(*) FROM positions")
-    if (await cursor.fetchone())[0] > 0:
+async def seed_mock_data(conn: asyncpg.Connection) -> None:
+    count = await conn.fetchval("SELECT COUNT(*) FROM positions")
+    if count > 0:
         return
 
-    # Positions
-    await db.executemany(
+    await conn.executemany(
         """INSERT INTO positions
            (symbol, quantity, avg_cost, current_price, market_value,
             unrealized_pnl, unrealized_pnl_pct, instrument_type, last_updated)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
         [
             ("NVDA", 100, 842.10, 869.42, 86942.0, 2732.0, 0.0324, "stock", NOW()),
             ("META", 50, 583.20, 572.44, 28622.0, -538.0, -0.0184, "stock", NOW()),
@@ -28,24 +27,22 @@ async def seed_mock_data(db: aiosqlite.Connection) -> None:
         ]
     )
 
-    # Open IC — TSLA
-    await db.execute(
+    await conn.execute(
         """INSERT INTO ic_positions
            (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
             spread_width, entry_credit, contracts, max_loss, current_debit,
             pct_max_profit, regime_at_entry, iv_percentile_at_entry, expected_move)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        ("TSLA", TODAY, EXPIRY_3D, 200.0, 205.0, 185.0, 180.0,
-         5.0, 1.85, 2, 630.0, 0.72, 0.611, "normal", 0.78, 7.20)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)""",
+        "TSLA", TODAY, EXPIRY_3D, 200.0, 205.0, 185.0, 180.0,
+        5.0, 1.85, 2, 630.0, 0.72, 0.611, "normal", 0.78, 7.20
     )
 
-    # Thesis entries
-    await db.executemany(
+    await conn.executemany(
         """INSERT INTO thesis
            (symbol, position_type, entry_catalyst, catalyst_source,
             price_target, stop_level, time_horizon, status, auto_populated,
             created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)""",
         [
             ("NVDA", "directional", "Insider cluster buy", "SEC Form 4 / Unusual Whales",
              1050.0, 820.0, "4 weeks", "intact", 0, NOW(), NOW()),
@@ -60,9 +57,8 @@ async def seed_mock_data(db: aiosqlite.Connection) -> None:
         ]
     )
 
-    # Notes
-    await db.executemany(
-        "INSERT INTO notes (symbol, body, created_at) VALUES (?,?,?)",
+    await conn.executemany(
+        "INSERT INTO notes (symbol, body, created_at) VALUES ($1,$2,$3)",
         [
             ("NVDA", "3 insiders bought >$2M combined last week. Breakout above 200MA confirmed.", NOW()),
             ("NVDA", "Holding into earnings. Thesis intact per latest SEC Form 4 filings.", NOW()),
@@ -71,7 +67,6 @@ async def seed_mock_data(db: aiosqlite.Connection) -> None:
         ]
     )
 
-    # IV history — 30 days per symbol
     random.seed(42)
     symbols_iv = {
         "NVDA": (0.45, 0.65), "META": (0.35, 0.55),
@@ -85,16 +80,16 @@ async def seed_mock_data(db: aiosqlite.Connection) -> None:
             rank = (iv - lo) / (hi - lo)
             pct = sum(1 for v in ivs[:i+1] if v < iv) / (i + 1)
             iv_rows.append((sym, d, round(iv, 4), round(rank, 4), round(pct, 4)))
-    await db.executemany(
-        "INSERT OR IGNORE INTO iv_history (symbol, date, iv, iv_rank, iv_percentile) VALUES (?,?,?,?,?)",
+    await conn.executemany(
+        "INSERT INTO iv_history (symbol, date, iv, iv_rank, iv_percentile) "
+        "VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",
         iv_rows
     )
 
-    # Regime snapshots
-    await db.executemany(
+    await conn.executemany(
         """INSERT INTO regime_snapshots
            (symbol, timestamp, market_regime, earnings_regime, iv_regime, vix, adx)
-           VALUES (?,?,?,?,?,?,?)""",
+           VALUES ($1,$2,$3,$4,$5,$6,$7)""",
         [
             ("NVDA", NOW(), "normal", "none", "normal", 18.4, 28.3),
             ("TSLA", NOW(), "normal", "pre_earnings", "high", 18.4, 42.1),
@@ -104,29 +99,25 @@ async def seed_mock_data(db: aiosqlite.Connection) -> None:
         ]
     )
 
-    # Agent run for TSLA IC
-    await db.execute(
+    await conn.fetchval(
         """INSERT INTO agent_runs
            (symbol, earnings_date, scanner_output, strategist_output,
             risk_manager_output, devils_advocate_output, portfolio_manager_output,
             final_decision, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        (
-            "TSLA", TODAY,
-            json.dumps({"passed": True, "regime": "normal", "iv_percentile": 0.78}),
-            json.dumps({"recommendation": "trade", "reasoning": "Strong IV crush history (avg 34%). IVP 78% well above 70% threshold. Front-week expiry captures earnings event cleanly."}),
-            json.dumps({"contracts": 2, "max_loss": 630.0, "verdict": "approved", "reasoning": "2% risk limit satisfied. No sector concentration issues."}),
-            json.dumps({"flag": None, "reasoning": "No material news catalyst to invalidate. Options chain liquid. Standard earnings play."}),
-            json.dumps({"decision": "trade", "reasoning": "All three agents aligned. Proceed with 2 contracts."}),
-            "trade", NOW()
-        )
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id""",
+        "TSLA", TODAY,
+        json.dumps({"passed": True, "regime": "normal", "iv_percentile": 0.78}),
+        json.dumps({"recommendation": "trade", "reasoning": "Strong IV crush history (avg 34%). IVP 78% well above 70% threshold. Front-week expiry captures earnings event cleanly."}),
+        json.dumps({"contracts": 2, "max_loss": 630.0, "verdict": "approved", "reasoning": "2% risk limit satisfied. No sector concentration issues."}),
+        json.dumps({"flag": None, "reasoning": "No material news catalyst to invalidate. Options chain liquid. Standard earnings play."}),
+        json.dumps({"decision": "trade", "reasoning": "All three agents aligned. Proceed with 2 contracts."}),
+        "trade", NOW()
     )
 
-    # Inbox items
-    await db.executemany(
+    await conn.executemany(
         """INSERT INTO inbox_items
            (priority, item_type, symbol, title, body, actions, created_at)
-           VALUES (?,?,?,?,?,?,?)""",
+           VALUES ($1,$2,$3,$4,$5,$6,$7)""",
         [
             ("urgent", "thesis_invalidated", "SPY",
              "SPY P — Thesis invalidated",
@@ -147,12 +138,10 @@ async def seed_mock_data(db: aiosqlite.Connection) -> None:
         ]
     )
 
-    # Daily briefing
-    await db.execute(
-        """INSERT INTO briefings (period, content, generated_at) VALUES (?,?,?)""",
-        (
-            "daily",
-            f"""# Daily Briefing — {TODAY}
+    await conn.execute(
+        """INSERT INTO briefings (period, content, generated_at) VALUES ($1,$2,$3)""",
+        "daily",
+        f"""# Daily Briefing — {TODAY}
 
 ## Portfolio Summary
 NAV $84,230 · +$1,027 today (+1.2%) · VIX 18.4 (normal regime)
@@ -173,8 +162,5 @@ NAV $84,230 · +$1,027 today (+1.2%) · VIX 18.4 (normal regime)
 1. Close SPY P position (stop breached)
 2. Review AMZN IC candidate (awaiting approval)
 """,
-            NOW()
-        )
+        NOW()
     )
-
-    await db.commit()

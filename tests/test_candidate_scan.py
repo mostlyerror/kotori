@@ -12,7 +12,6 @@ from kotorid.candidate_scan import (
     scan_one_symbol,
     select_strikes,
 )
-from kotorid.db import get_db, init_db
 from kotorid.tradier_client import build_client
 
 
@@ -135,88 +134,76 @@ def _scan_handler(spot=750, expiry_days_out=7):
 
 
 @pytest.mark.asyncio
-async def test_scan_one_symbol_writes_candidate_and_inbox(tmp_path):
+async def test_scan_one_symbol_writes_candidate_and_inbox(conn):
     """Happy path: full scan flow inserts candidate + agent_run + inbox card."""
-    db_path = str(tmp_path / "scan.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        async with _make_client(_scan_handler(spot=750)) as c:
-            result = await scan_one_symbol(db, c, "SPY")
-        assert result is not None
-        assert result["symbol"] == "SPY"
+    async with _make_client(_scan_handler(spot=750)) as c:
+        result = await scan_one_symbol(conn, c, "SPY")
+    assert result is not None
+    assert result["symbol"] == "SPY"
 
-        cand = await (await db.execute(
-            "SELECT symbol, expected_credit, max_loss, order_status, short_call, long_call, short_put, long_put "
-            "FROM candidates WHERE symbol='SPY'"
-        )).fetchone()
-        assert cand["order_status"] == "pending_approval"
-        assert cand["expected_credit"] > 0
-        # Sanity: short strikes flank spot, longs flank shorts
-        assert cand["long_put"] < cand["short_put"] < 750 < cand["short_call"] < cand["long_call"]
-        assert cand["long_call"] - cand["short_call"] == pytest.approx(5)
-        assert cand["short_put"] - cand["long_put"] == pytest.approx(5)
+    cand = await conn.fetchrow(
+        "SELECT symbol, expected_credit, max_loss, order_status, short_call, long_call, short_put, long_put "
+        "FROM candidates WHERE symbol='SPY'"
+    )
+    assert cand["order_status"] == "pending_approval"
+    assert cand["expected_credit"] > 0
+    # Sanity: short strikes flank spot, longs flank shorts
+    assert cand["long_put"] < cand["short_put"] < 750 < cand["short_call"] < cand["long_call"]
+    assert cand["long_call"] - cand["short_call"] == pytest.approx(5)
+    assert cand["short_put"] - cand["long_put"] == pytest.approx(5)
 
-        inbox = await (await db.execute(
-            "SELECT priority, item_type, symbol, title FROM inbox_items WHERE symbol='SPY'"
-        )).fetchone()
-        assert inbox["priority"] == "action_required"
-        assert inbox["item_type"] == "ic_candidate"
+    inbox = await conn.fetchrow(
+        "SELECT priority, item_type, symbol, title FROM inbox_items WHERE symbol='SPY'"
+    )
+    assert inbox["priority"] == "action_required"
+    assert inbox["item_type"] == "ic_candidate"
 
 
 @pytest.mark.asyncio
-async def test_scan_one_symbol_skips_duplicate_same_day(tmp_path):
+async def test_scan_one_symbol_skips_duplicate_same_day(conn):
     """A symbol already scanned today should not generate a second candidate."""
-    db_path = str(tmp_path / "dup.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        async with _make_client(_scan_handler(spot=750)) as c:
-            first = await scan_one_symbol(db, c, "SPY")
-            second = await scan_one_symbol(db, c, "SPY")
-        assert first is not None
-        assert second is None
-        count = await (await db.execute(
-            "SELECT COUNT(*) AS n FROM candidates WHERE symbol='SPY'"
-        )).fetchone()
-        assert count["n"] == 1
+    async with _make_client(_scan_handler(spot=750)) as c:
+        first = await scan_one_symbol(conn, c, "SPY")
+        second = await scan_one_symbol(conn, c, "SPY")
+    assert first is not None
+    assert second is None
+    count = await conn.fetchval(
+        "SELECT COUNT(*) FROM candidates WHERE symbol='SPY'"
+    )
+    assert count == 1
 
 
 @pytest.mark.asyncio
-async def test_scan_candidates_processes_full_watchlist(tmp_path):
+async def test_scan_candidates_processes_full_watchlist(conn):
     """scan_candidates iterates the provided symbol list and writes for each."""
-    db_path = str(tmp_path / "watchlist.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        async with _make_client(_scan_handler(spot=750)) as c:
-            written = await scan_candidates(db, c, symbols=["SPY", "QQQ", "IWM"])
-        assert len(written) == 3
-        assert {w["symbol"] for w in written} == {"SPY", "QQQ", "IWM"}
+    async with _make_client(_scan_handler(spot=750)) as c:
+        written = await scan_candidates(conn, c, symbols=["SPY", "QQQ", "IWM"])
+    assert len(written) == 3
+    assert {w["symbol"] for w in written} == {"SPY", "QQQ", "IWM"}
 
 
 @pytest.mark.asyncio
-async def test_scan_candidates_emits_candidate_ready_alert(tmp_path):
+async def test_scan_candidates_emits_candidate_ready_alert(conn):
     """When scan_candidates writes >=1 candidate, it must enqueue a
     candidate_ready Discord alert with structured fields."""
     import json as _json
 
     from kotorid.alerts_lib import ALERT_FIELDS_KEY
 
-    db_path = str(tmp_path / "alert.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        async with _make_client(_scan_handler(spot=750)) as c:
-            written = await scan_candidates(db, c, symbols=["SPY"])
-        assert len(written) == 1
+    async with _make_client(_scan_handler(spot=750)) as c:
+        written = await scan_candidates(conn, c, symbols=["SPY"])
+    assert len(written) == 1
 
-        row = await (await db.execute(
-            "SELECT symbol, alert_type, message FROM alerts "
-            "WHERE alert_type='candidate_ready'"
-        )).fetchone()
-        assert row is not None, "expected a candidate_ready alert row"
-        assert row["symbol"] == "SPY"
-        assert ALERT_FIELDS_KEY in row["message"]
+    row = await conn.fetchrow(
+        "SELECT symbol, alert_type, message FROM alerts "
+        "WHERE alert_type='candidate_ready'"
+    )
+    assert row is not None, "expected a candidate_ready alert row"
+    assert row["symbol"] == "SPY"
+    assert ALERT_FIELDS_KEY in row["message"]
 
-        _, _, json_tail = row["message"].partition(ALERT_FIELDS_KEY)
-        payload = _json.loads(json_tail)
-        fields = payload["fields"]
-        assert fields["count"] >= 1
-        assert fields["credit"] > 0
+    _, _, json_tail = row["message"].partition(ALERT_FIELDS_KEY)
+    payload = _json.loads(json_tail)
+    fields = payload["fields"]
+    assert fields["count"] >= 1
+    assert fields["credit"] > 0

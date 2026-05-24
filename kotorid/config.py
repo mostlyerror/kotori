@@ -1,8 +1,9 @@
 import os
 from pathlib import Path
 
-DB_PATH = os.path.expanduser(
-    os.environ.get("KOTORI_DB", str(Path.home() / ".kotori" / "kotori.db"))
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    os.environ.get("DATABASE_PUBLIC_URL", ""),
 )
 TRADIER_API_KEY = os.environ.get("TRADIER_API_KEY", "")
 TRADIER_ACCOUNT_ID = os.environ.get("TRADIER_ACCOUNT_ID", "")

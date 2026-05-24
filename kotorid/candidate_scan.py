@@ -21,7 +21,7 @@ import logging
 import os
 from datetime import date, datetime, timezone
 
-import aiosqlite
+import asyncpg
 import httpx
 
 from kotorid.alerts_lib import create_alert
@@ -137,16 +137,16 @@ async def _get_spot(client: httpx.AsyncClient, symbol: str) -> float | None:
 
 
 async def scan_one_symbol(
-    db: aiosqlite.Connection, client: httpx.AsyncClient, symbol: str,
+    conn: asyncpg.Connection, client: httpx.AsyncClient, symbol: str,
 ) -> dict | None:
     """Scan a single symbol; return the candidate dict if one was written."""
     today_iso = date.today().isoformat()
 
-    cur = await db.execute(
-        "SELECT id FROM candidates WHERE symbol=? AND scan_date=?",
-        (symbol, today_iso),
+    existing = await conn.fetchrow(
+        "SELECT id FROM candidates WHERE symbol=$1 AND scan_date=$2",
+        symbol, today_iso,
     )
-    if await cur.fetchone():
+    if existing:
         return None  # already scanned today
 
     expiry = await _find_expiry(client, symbol)
@@ -184,77 +184,69 @@ async def scan_one_symbol(
     max_loss = (spread_width - credit) * 100  # per contract
 
     now_iso = datetime.now(tz=timezone.utc).isoformat()
-    ar_cursor = await db.execute(
+    agent_run_id = await conn.fetchval(
         """INSERT INTO agent_runs
            (symbol, earnings_date, scanner_output, strategist_output,
             risk_manager_output, devils_advocate_output, portfolio_manager_output,
             final_decision, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        (
-            symbol, today_iso,
-            json.dumps({
-                "spot": spot, "expiry": expiry, "spread_width": spread_width,
-                "short_call_delta": legs["short_call"]["greeks"]["delta"],
-                "short_put_delta": legs["short_put"]["greeks"]["delta"],
-                "short_call_iv": legs["short_call"]["greeks"].get("mid_iv"),
-                "short_put_iv": legs["short_put"]["greeks"].get("mid_iv"),
-            }),
-            json.dumps({
-                "recommendation": "manual_review",
-                "reasoning": (
-                    f"Delta-screened ~{int(TARGET_SHORT_DELTA*100)}-delta short strikes; "
-                    f"${WING_WIDTH} wings; credit/width = {credit/spread_width:.0%}"
-                ),
-            }),
-            json.dumps({"verdict": "pending", "reasoning": "No risk model yet (stub)"}),
-            json.dumps({"flag": None, "reasoning": "No devils advocate yet (stub)"}),
-            json.dumps({"decision": "pending", "reasoning": "Awaiting human approval"}),
-            "pending", now_iso,
-        ),
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id""",
+        symbol, today_iso,
+        json.dumps({
+            "spot": spot, "expiry": expiry, "spread_width": spread_width,
+            "short_call_delta": legs["short_call"]["greeks"]["delta"],
+            "short_put_delta": legs["short_put"]["greeks"]["delta"],
+            "short_call_iv": legs["short_call"]["greeks"].get("mid_iv"),
+            "short_put_iv": legs["short_put"]["greeks"].get("mid_iv"),
+        }),
+        json.dumps({
+            "recommendation": "manual_review",
+            "reasoning": (
+                f"Delta-screened ~{int(TARGET_SHORT_DELTA*100)}-delta short strikes; "
+                f"${WING_WIDTH} wings; credit/width = {credit/spread_width:.0%}"
+            ),
+        }),
+        json.dumps({"verdict": "pending", "reasoning": "No risk model yet (stub)"}),
+        json.dumps({"flag": None, "reasoning": "No devils advocate yet (stub)"}),
+        json.dumps({"decision": "pending", "reasoning": "Awaiting human approval"}),
+        "pending", now_iso,
     )
-    agent_run_id = ar_cursor.lastrowid
-    cand_cursor = await db.execute(
+    candidate_id = await conn.fetchval(
         """INSERT INTO candidates
            (agent_run_id, symbol, scan_date, order_status, expected_credit, contracts, max_loss,
             short_call, long_call, short_put, long_put)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            agent_run_id, symbol, today_iso, "pending_approval",
-            round(credit, 2), 1, round(max_loss, 2),
-            legs["short_call"]["strike"], legs["long_call"]["strike"],
-            legs["short_put"]["strike"], legs["long_put"]["strike"],
-        ),
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id""",
+        agent_run_id, symbol, today_iso, "pending_approval",
+        round(credit, 2), 1, round(max_loss, 2),
+        legs["short_call"]["strike"], legs["long_call"]["strike"],
+        legs["short_put"]["strike"], legs["long_put"]["strike"],
     )
-    await db.execute(
+    await conn.execute(
         """INSERT INTO inbox_items
            (priority, item_type, symbol, title, body, actions, created_at)
-           VALUES (?,?,?,?,?,?,?)""",
+           VALUES ($1,$2,$3,$4,$5,$6,$7)""",
+        "action_required", "ic_candidate", symbol,
+        f"{symbol} IC Candidate — {expiry}",
         (
-            "action_required", "ic_candidate", symbol,
-            f"{symbol} IC Candidate — {expiry}",
-            (
-                f"SC{int(legs['short_call']['strike'])} / LC{int(legs['long_call']['strike'])} / "
-                f"SP{int(legs['short_put']['strike'])} / LP{int(legs['long_put']['strike'])} · "
-                f"Credit ${credit:.2f}/sh · Max loss ${max_loss:.0f}/contract · "
-                f"Δ short call {legs['short_call']['greeks']['delta']:.2f} / "
-                f"short put {legs['short_put']['greeks']['delta']:.2f}"
-            ),
-            json.dumps(["approve", "reject", "view_pipeline"]),
-            now_iso,
+            f"SC{int(legs['short_call']['strike'])} / LC{int(legs['long_call']['strike'])} / "
+            f"SP{int(legs['short_put']['strike'])} / LP{int(legs['long_put']['strike'])} · "
+            f"Credit ${credit:.2f}/sh · Max loss ${max_loss:.0f}/contract · "
+            f"Δ short call {legs['short_call']['greeks']['delta']:.2f} / "
+            f"short put {legs['short_put']['greeks']['delta']:.2f}"
         ),
+        json.dumps(["approve", "reject", "view_pipeline"]),
+        now_iso,
     )
-    await db.commit()
     return {
         "symbol": symbol, "expiry": expiry, "spot": spot,
         "short_call": legs["short_call"]["strike"], "long_call": legs["long_call"]["strike"],
         "short_put": legs["short_put"]["strike"], "long_put": legs["long_put"]["strike"],
         "credit": round(credit, 2), "max_loss": round(max_loss, 2),
-        "agent_run_id": agent_run_id, "candidate_id": cand_cursor.lastrowid,
+        "agent_run_id": agent_run_id, "candidate_id": candidate_id,
     }
 
 
 async def scan_candidates(
-    db: aiosqlite.Connection, client: httpx.AsyncClient,
+    conn: asyncpg.Connection, client: httpx.AsyncClient,
     symbols: list[str] | None = None,
 ) -> list[dict]:
     """Run scan_one_symbol for every symbol in the watchlist.
@@ -267,7 +259,7 @@ async def scan_candidates(
     written: list[dict] = []
     for sym in syms:
         try:
-            result = await scan_one_symbol(db, client, sym)
+            result = await scan_one_symbol(conn, client, sym)
         except Exception:
             log.exception("candidate_scan: error scanning %s", sym)
             continue
@@ -284,7 +276,7 @@ async def scan_candidates(
             "Approve in TUI or wait — auto-place fallback at 14:50 CT.",
         ]
         await create_alert(
-            db,
+            conn,
             alert_type="candidate_ready",
             symbol=top["symbol"],
             headline="Candidates Ready",
@@ -296,6 +288,5 @@ async def scan_candidates(
                 "max_loss": top["max_loss"],
             },
         )
-        await db.commit()
     log.info("candidate_scan: wrote %d candidate(s) from %d symbols", len(written), len(syms))
     return written

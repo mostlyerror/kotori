@@ -1,30 +1,38 @@
-from pathlib import Path
-import aiosqlite
-from kotorid.config import DB_PATH
+import asyncpg
+from kotorid.config import DATABASE_URL
+from kotorid.db import _pool, create_pool
+
+_tui_pool: asyncpg.Pool | None = None
+
+
+async def _get_pool() -> asyncpg.Pool:
+    global _tui_pool
+    if _pool is not None:
+        return _pool
+    if _tui_pool is None:
+        _tui_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
+    return _tui_pool
 
 
 async def query(sql: str, params: tuple = ()) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(sql, params)
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+    pool = await _get_pool()
+    rows = await pool.fetch(sql, *params)
+    return [dict(r) for r in rows]
 
 
 async def execute(sql: str, params: tuple = ()) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(sql, params)
-        await db.commit()
+    pool = await _get_pool()
+    await pool.execute(sql, *params)
 
 
 async def get_nav() -> float:
     rows = await query("SELECT SUM(market_value) as nav FROM positions")
-    return rows[0]["nav"] or 0.0
+    return rows[0]["nav"] or 0.0 if rows else 0.0
 
 
 async def get_today_pnl() -> float:
     rows = await query("SELECT SUM(unrealized_pnl) as pnl FROM positions")
-    return rows[0]["pnl"] or 0.0
+    return rows[0]["pnl"] or 0.0 if rows else 0.0
 
 
 async def get_vix() -> float:
@@ -52,7 +60,6 @@ async def get_inbox_count() -> int:
 
 
 async def get_open_ics() -> list[dict]:
-    """Open ICs (exit_reason IS NULL) with current monitoring state."""
     return await query(
         """SELECT id, symbol, entry_date, expiry, short_call, long_call,
                   short_put, long_put, entry_credit, current_debit,
@@ -64,7 +71,6 @@ async def get_open_ics() -> list[dict]:
 
 
 async def get_closed_ics() -> list[dict]:
-    """Closed ICs with realized P&L for performance review."""
     return await query(
         """SELECT id, symbol, entry_date, expiry, exit_reason, exit_debit,
                   entry_credit, realized_pnl, contracts, max_loss
@@ -75,14 +81,6 @@ async def get_closed_ics() -> list[dict]:
 
 
 async def get_strategy_stats() -> dict:
-    """Aggregate IC strategy performance.
-
-    open_count / closed_count, total_realized_pnl, win_rate (% of closed
-    with positive P&L; NULL realized_pnl is excluded from the denominator
-    because we can't classify it as win/loss), unrealized_pnl (sum of
-    (entry_credit - current_debit) * 100 * contracts for open ICs that
-    have a current_debit).
-    """
     rows = await query(
         """SELECT
               SUM(CASE WHEN exit_reason IS NULL THEN 1 ELSE 0 END) AS open_count,

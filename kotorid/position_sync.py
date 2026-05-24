@@ -1,4 +1,4 @@
-"""Sync Tradier positions into the local SQLite positions table.
+"""Sync Tradier positions into the positions table.
 
 Strategy: Tradier is authoritative for what positions exist, so we DELETE
 the entire positions table and re-INSERT every sync. This is simpler than
@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 
-import aiosqlite
+import asyncpg
 import httpx
 
 from kotorid.tradier_client import (
@@ -26,10 +26,6 @@ def _now() -> str:
 
 
 def _pick_price(quote: dict | None) -> float:
-    """Pick a usable current price from a Tradier quote dict.
-
-    Prefers `last`, falls back to `bid`, then `ask`, then 0.0.
-    """
     if not quote:
         return 0.0
     for key in ("last", "bid", "ask"):
@@ -43,12 +39,6 @@ def _pick_price(quote: dict | None) -> float:
 
 
 def _multiplier(quote: dict | None) -> int:
-    """Return the contract multiplier reported by Tradier.
-
-    Tradier includes `contract_size` on option quotes (100 for standard
-    equity options, 10 for mini contracts) and omits it for stocks/ETFs.
-    Defaults to 1 so equities work without a separate branch.
-    """
     if not quote:
         return 1
     cs = quote.get("contract_size")
@@ -59,19 +49,12 @@ def _multiplier(quote: dict | None) -> int:
 
 
 async def sync_positions(
-    db: aiosqlite.Connection,
+    conn: asyncpg.Connection,
     client: httpx.AsyncClient,
     account_id: str,
 ) -> int:
-    """Pull positions from Tradier, normalize, upsert into positions table.
-
-    Returns the number of positions synced.
-    """
     raw_positions = await get_positions(client, account_id)
 
-    # Collect unique symbols to quote. For options we still quote by the
-    # OCC symbol — Tradier accepts both stock tickers and OCC option symbols
-    # on /markets/quotes.
     symbols = sorted({p["symbol"] for p in raw_positions if p.get("symbol")})
     quotes = await get_quotes(client, symbols) if symbols else {}
 
@@ -91,10 +74,6 @@ async def sync_positions(
         current_price = _pick_price(quote)
         multiplier = _multiplier(quote)
 
-        # `notional_qty` is the number of underlying shares represented by
-        # the position (= contracts * contract_size for options, = shares
-        # for stocks). Both avg_cost and market_value are derived in
-        # per-share units so they're comparable across instrument types.
         notional_qty = quantity * multiplier
         avg_cost = (cost_basis / notional_qty) if notional_qty else 0.0
         market_value = notional_qty * current_price
@@ -135,17 +114,15 @@ async def sync_positions(
             )
         )
 
-    # Full replace — Tradier is authoritative.
-    await db.execute("DELETE FROM positions")
+    await conn.execute("DELETE FROM positions")
     if rows:
-        await db.executemany(
+        await conn.executemany(
             """INSERT INTO positions
                (symbol, quantity, avg_cost, current_price, market_value,
                 unrealized_pnl, unrealized_pnl_pct, instrument_type,
                 underlying, expiry, strike, put_call, last_updated)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
             rows,
         )
-    await db.commit()
     log.info("position_sync: %d positions synced", len(rows))
     return len(rows)

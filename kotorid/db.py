@@ -1,44 +1,64 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
-import aiosqlite
+import asyncpg
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
+_pool: asyncpg.Pool | None = None
+
+
+async def create_pool(dsn: str) -> asyncpg.Pool:
+    global _pool
+    _pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
+    return _pool
+
+
+async def close_pool() -> None:
+    global _pool
+    if _pool:
+        await _pool.close()
+        _pool = None
+
 
 @asynccontextmanager
-async def get_db(path: str):
-    """Context manager for async SQLite database connections."""
-    db = await aiosqlite.connect(path)
-    db.row_factory = aiosqlite.Row
-    try:
-        yield db
-    finally:
-        await db.close()
+async def get_db(dsn: str | None = None):
+    """Acquire a connection from the pool.
 
-
-async def _ensure_column(
-    db: aiosqlite.Connection, table: str, column: str, ddl: str,
-) -> None:
-    """ALTER TABLE ADD COLUMN if the column is missing.
-
-    SQLite has no IF NOT EXISTS for ADD COLUMN, so we PRAGMA the table
-    info first. Lets us evolve the schema without a full migration system.
+    The dsn parameter is accepted for backward compatibility but ignored
+    when a pool exists.
     """
-    cursor = await db.execute(f"PRAGMA table_info({table})")
-    cols = {row[1] for row in await cursor.fetchall()}
-    if column not in cols:
-        await db.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+    if _pool is None:
+        if dsn is None:
+            raise RuntimeError("DB pool not initialized — call create_pool() first")
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
+        async with pool.acquire() as conn:
+            try:
+                yield conn
+            finally:
+                await pool.close()
+        return
+    async with _pool.acquire() as conn:
+        yield conn
 
 
-async def init_db(db: aiosqlite.Connection) -> None:
-    """Initialize the database with schema and pragmas."""
-    await db.execute("PRAGMA journal_mode=WAL")
-    await db.execute("PRAGMA foreign_keys=ON")
+async def init_db(conn: asyncpg.Connection) -> None:
     schema = SCHEMA_PATH.read_text()
-    await db.executescript(schema)
-    # Schema migrations for columns added after the initial release.
-    await _ensure_column(db, "alerts", "notified_at", "notified_at TEXT")
-    await _ensure_column(db, "ic_positions", "order_id", "order_id TEXT")
-    await _ensure_column(db, "ic_positions", "position_warning_at", "position_warning_at TEXT")
-    await _ensure_column(db, "ic_positions", "short_strike_warned_at", "short_strike_warned_at TEXT")
-    await db.commit()
+    for statement in _split_statements(schema):
+        await conn.execute(statement)
+
+
+def _split_statements(sql: str) -> list[str]:
+    """Split a SQL script into individual statements."""
+    statements = []
+    current = []
+    for line in sql.split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        current.append(line)
+        if stripped.endswith(";"):
+            statements.append("\n".join(current))
+            current = []
+    if current:
+        statements.append("\n".join(current))
+    return [s for s in statements if s.strip()]

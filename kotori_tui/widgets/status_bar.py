@@ -22,6 +22,8 @@ class StatusBar(Widget):
     StatusBar .regime-normal { color: $success; }
     StatusBar .regime-caution { color: $warning; }
     StatusBar .regime-no_trade { color: $error; }
+    StatusBar .spacer { width: 1fr; }
+    StatusBar .keys { color: $text-muted; }
     """
 
     nav: reactive[float] = reactive(0.0)
@@ -38,10 +40,11 @@ class StatusBar(Widget):
         yield Label("", id="sb-vix")
         yield Label("", id="sb-regime")
         yield Label("", id="sb-alerts", classes="alert-badge")
-        yield Label("  [↵] detail   [q] quit", id="sb-keys")
+        yield Label("", id="sb-spacer", classes="spacer")
+        yield Label("↵:detail a:approve r:reject p:strategy q:quit", id="sb-keys", classes="keys")
 
     def on_mount(self) -> None:
-        self.set_interval(3, self.refresh_stats)
+        self.set_interval(2, self.refresh_stats)
 
     @work(exclusive=True)
     async def refresh_stats(self) -> None:

@@ -6,7 +6,6 @@ import httpx
 import pytest
 
 from kotorid.alerts_lib import ALERT_FIELDS_KEY
-from kotorid.db import get_db, init_db
 from kotorid.order_placement import place_approved_candidates, place_iron_condor
 from kotorid.tradier_client import build_client
 
@@ -72,168 +71,155 @@ async def test_place_iron_condor_posts_correct_multileg_payload():
     assert body["option_symbol%5B3%5D"] == "SPY260529C00765000"
 
 
-async def _seed_one_approved_candidate(db, symbol="SPY", expiry="2026-05-29"):
+async def _seed_one_approved_candidate(conn, symbol="SPY", expiry="2026-05-29"):
     """Helper: insert agent_runs row + candidate in 'approved' state +
     a pending inbox card for the symbol."""
-    ar_cur = await db.execute(
+    ar_id = await conn.fetchval(
         """INSERT INTO agent_runs
            (symbol, earnings_date, scanner_output, strategist_output,
             risk_manager_output, devils_advocate_output, portfolio_manager_output,
             final_decision, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        (symbol, date.today().isoformat(),
-         json.dumps({"expiry": expiry, "spot": 747.5}),
-         "{}", "{}", "{}", "{}", "pending",
-         "2026-05-22T00:00:00"),
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           RETURNING id""",
+        symbol, date.today().isoformat(),
+        json.dumps({"expiry": expiry, "spot": 747.5}),
+        "{}", "{}", "{}", "{}", "pending",
+        "2026-05-22T00:00:00",
     )
-    ar_id = ar_cur.lastrowid
-    cand_cur = await db.execute(
+    cand_id = await conn.fetchval(
         """INSERT INTO candidates
            (agent_run_id, symbol, scan_date, order_status,
             short_call, long_call, short_put, long_put,
             expected_credit, contracts, max_loss)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-        (ar_id, symbol, date.today().isoformat(), "approved",
-         760.0, 765.0, 735.0, 730.0, 1.00, 1, 400.0),
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+           RETURNING id""",
+        ar_id, symbol, date.today().isoformat(), "approved",
+        760.0, 765.0, 735.0, 730.0, 1.00, 1, 400.0,
     )
-    await db.execute(
+    await conn.execute(
         """INSERT INTO inbox_items
            (priority, item_type, symbol, title, body, actions, created_at)
-           VALUES (?,?,?,?,?,?,?)""",
-        ("action_required", "ic_candidate", symbol,
-         f"{symbol} IC Candidate", "test body", '["approve","reject"]',
-         "2026-05-22T00:00:00"),
+           VALUES ($1,$2,$3,$4,$5,$6,$7)""",
+        "action_required", "ic_candidate", symbol,
+        f"{symbol} IC Candidate", "test body", '["approve","reject"]',
+        "2026-05-22T00:00:00",
     )
-    await db.commit()
-    return cand_cur.lastrowid
+    return cand_id
 
 
 @pytest.mark.asyncio
-async def test_place_approved_candidates_happy_path(tmp_path):
+async def test_place_approved_candidates_happy_path(conn):
     """Approved candidate gets placed, transitioned to 'placed', writes
     ic_positions, dismisses the inbox card."""
     captured: dict = {}
-    db_path = str(tmp_path / "ord.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        cand_id = await _seed_one_approved_candidate(db)
-        async with _make_client(_ok_order_handler(captured)) as c:
-            placed = await place_approved_candidates(db, c, "ACCT-X")
-        assert len(placed) == 1
-        assert placed[0]["symbol"] == "SPY"
-        assert placed[0]["order_id"] == 999
+    cand_id = await _seed_one_approved_candidate(conn)
+    async with _make_client(_ok_order_handler(captured)) as c:
+        placed = await place_approved_candidates(conn, c, "ACCT-X")
+    assert len(placed) == 1
+    assert placed[0]["symbol"] == "SPY"
+    assert placed[0]["order_id"] == 999
 
-        # Candidate transitioned to 'placed'
-        row = await (await db.execute(
-            "SELECT order_status FROM candidates WHERE id=?", (cand_id,)
-        )).fetchone()
-        assert row["order_status"] == "placed"
+    # Candidate transitioned to 'placed'
+    row = await conn.fetchrow(
+        "SELECT order_status FROM candidates WHERE id=$1", cand_id,
+    )
+    assert row["order_status"] == "placed"
 
-        # ic_positions row materialized with correct fields
-        ic = await (await db.execute(
-            "SELECT symbol, expiry, short_call, long_call, short_put, long_put, "
-            "spread_width, entry_credit, contracts, max_loss FROM ic_positions"
-        )).fetchone()
-        assert ic["symbol"] == "SPY"
-        assert ic["expiry"] == "2026-05-29"
-        assert ic["short_call"] == 760.0
-        assert ic["long_call"] == 765.0
-        assert ic["spread_width"] == 5.0
-        assert ic["entry_credit"] == pytest.approx(1.00)
-        assert ic["max_loss"] == pytest.approx(400.0)
+    # ic_positions row materialized with correct fields
+    ic = await conn.fetchrow(
+        "SELECT symbol, expiry, short_call, long_call, short_put, long_put, "
+        "spread_width, entry_credit, contracts, max_loss FROM ic_positions"
+    )
+    assert ic["symbol"] == "SPY"
+    assert ic["expiry"] == "2026-05-29"
+    assert ic["short_call"] == 760.0
+    assert ic["long_call"] == 765.0
+    assert ic["spread_width"] == 5.0
+    assert ic["entry_credit"] == pytest.approx(1.00)
+    assert ic["max_loss"] == pytest.approx(400.0)
 
-        # Inbox card dismissed
-        inbox = await (await db.execute(
-            "SELECT dismissed_at FROM inbox_items WHERE symbol='SPY'"
-        )).fetchone()
-        assert inbox["dismissed_at"] is not None
+    # Inbox card dismissed
+    inbox = await conn.fetchrow(
+        "SELECT dismissed_at FROM inbox_items WHERE symbol='SPY'"
+    )
+    assert inbox["dismissed_at"] is not None
 
-        # ic_placed alert created
-        alert = await (await db.execute(
-            "SELECT alert_type, message FROM alerts WHERE symbol='SPY'"
-        )).fetchone()
-        assert alert["alert_type"] == "ic_placed"
-        assert "999" in alert["message"]
+    # ic_placed alert created
+    alert = await conn.fetchrow(
+        "SELECT alert_type, message FROM alerts WHERE symbol='SPY'"
+    )
+    assert alert["alert_type"] == "ic_placed"
+    assert "999" in alert["message"]
 
 
 @pytest.mark.asyncio
-async def test_place_approved_candidates_skips_when_expiry_missing(tmp_path):
+async def test_place_approved_candidates_skips_when_expiry_missing(conn):
     """If scanner_output JSON has no expiry, skip the candidate (don't crash)."""
     def handler(request):
         raise AssertionError("should not call Tradier when expiry is missing")
 
-    db_path = str(tmp_path / "noexp.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        ar_cur = await db.execute(
-            """INSERT INTO agent_runs
-               (symbol, earnings_date, scanner_output, strategist_output,
-                risk_manager_output, devils_advocate_output, portfolio_manager_output,
-                final_decision, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            ("SPY", date.today().isoformat(),
-             json.dumps({}),  # no expiry!
-             "{}", "{}", "{}", "{}", "pending", "2026-05-22T00:00:00"),
-        )
-        ar_id = ar_cur.lastrowid
-        await db.execute(
-            """INSERT INTO candidates
-               (agent_run_id, symbol, scan_date, order_status,
-                short_call, long_call, short_put, long_put,
-                expected_credit, contracts, max_loss)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            (ar_id, "SPY", date.today().isoformat(), "approved",
-             760.0, 765.0, 735.0, 730.0, 1.00, 1, 400.0),
-        )
-        await db.commit()
-        async with _make_client(handler) as c:
-            placed = await place_approved_candidates(db, c, "ACCT-X")
-        assert placed == []
+    ar_id = await conn.fetchval(
+        """INSERT INTO agent_runs
+           (symbol, earnings_date, scanner_output, strategist_output,
+            risk_manager_output, devils_advocate_output, portfolio_manager_output,
+            final_decision, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           RETURNING id""",
+        "SPY", date.today().isoformat(),
+        json.dumps({}),  # no expiry!
+        "{}", "{}", "{}", "{}", "pending", "2026-05-22T00:00:00",
+    )
+    await conn.execute(
+        """INSERT INTO candidates
+           (agent_run_id, symbol, scan_date, order_status,
+            short_call, long_call, short_put, long_put,
+            expected_credit, contracts, max_loss)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)""",
+        ar_id, "SPY", date.today().isoformat(), "approved",
+        760.0, 765.0, 735.0, 730.0, 1.00, 1, 400.0,
+    )
+    async with _make_client(handler) as c:
+        placed = await place_approved_candidates(conn, c, "ACCT-X")
+    assert placed == []
 
 
 @pytest.mark.asyncio
-async def test_place_approved_candidates_retains_status_on_api_failure(tmp_path):
+async def test_place_approved_candidates_retains_status_on_api_failure(conn):
     """If Tradier returns an error, candidate stays 'approved' (don't transition
     to 'placed' or insert ic_positions). Cron retries on next run."""
     def handler(request):
         return httpx.Response(400, json={"errors": {"error": "bad request"}})
 
-    db_path = str(tmp_path / "fail.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        cand_id = await _seed_one_approved_candidate(db)
-        async with _make_client(handler) as c:
-            placed = await place_approved_candidates(db, c, "ACCT-X")
-        assert placed == []
+    cand_id = await _seed_one_approved_candidate(conn)
+    async with _make_client(handler) as c:
+        placed = await place_approved_candidates(conn, c, "ACCT-X")
+    assert placed == []
 
-        # Candidate stays 'approved' for retry
-        row = await (await db.execute(
-            "SELECT order_status FROM candidates WHERE id=?", (cand_id,)
-        )).fetchone()
-        assert row["order_status"] == "approved"
+    # Candidate stays 'approved' for retry
+    row = await conn.fetchrow(
+        "SELECT order_status FROM candidates WHERE id=$1", cand_id,
+    )
+    assert row["order_status"] == "approved"
 
-        # No ic_positions row inserted
-        ic_count = await (await db.execute(
-            "SELECT COUNT(*) AS n FROM ic_positions"
-        )).fetchone()
-        assert ic_count["n"] == 0
+    # No ic_positions row inserted
+    ic_count = await conn.fetchval(
+        "SELECT COUNT(*) FROM ic_positions"
+    )
+    assert ic_count == 0
 
 
 @pytest.mark.asyncio
-async def test_place_approved_candidates_noop_when_no_approved_rows(tmp_path):
+async def test_place_approved_candidates_noop_when_no_approved_rows(conn):
     def handler(request):
         raise AssertionError("should not call Tradier when no approved rows")
 
-    db_path = str(tmp_path / "empty.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        async with _make_client(handler) as c:
-            placed = await place_approved_candidates(db, c, "ACCT-X")
-        assert placed == []
+    async with _make_client(handler) as c:
+        placed = await place_approved_candidates(conn, c, "ACCT-X")
+    assert placed == []
 
 
 @pytest.mark.asyncio
-async def test_ic_placed_alert_is_structured(tmp_path):
+async def test_ic_placed_alert_is_structured(conn):
     """ic_placed alert should carry structured body_lines + fields with
     order_id, expiry, expected_credit, max_loss."""
     def handler(request: httpx.Request) -> httpx.Response:
@@ -241,17 +227,14 @@ async def test_ic_placed_alert_is_structured(tmp_path):
             return httpx.Response(200, json={"order": {"id": 12345, "status": "ok"}})
         raise AssertionError(f"unexpected request: {request.method} {request.url}")
 
-    db_path = str(tmp_path / "icplaced.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        await _seed_one_approved_candidate(db, symbol="SPY", expiry="2026-05-29")
-        async with _make_client(handler) as c:
-            placed = await place_approved_candidates(db, c, "ACCT-X")
-        assert len(placed) == 1
+    await _seed_one_approved_candidate(conn, symbol="SPY", expiry="2026-05-29")
+    async with _make_client(handler) as c:
+        placed = await place_approved_candidates(conn, c, "ACCT-X")
+    assert len(placed) == 1
 
-        alert = await (await db.execute(
-            "SELECT message FROM alerts WHERE alert_type='ic_placed' AND symbol='SPY'"
-        )).fetchone()
+    alert = await conn.fetchrow(
+        "SELECT message FROM alerts WHERE alert_type='ic_placed' AND symbol='SPY'"
+    )
 
     assert alert is not None
     assert ALERT_FIELDS_KEY in alert["message"]
@@ -265,23 +248,20 @@ async def test_ic_placed_alert_is_structured(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_materialize_ic_position_stores_order_id(tmp_path):
+async def test_materialize_ic_position_stores_order_id(conn):
     """When Tradier returns order id 12345, ic_positions.order_id == '12345'."""
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and "/orders" in request.url.path:
             return httpx.Response(200, json={"order": {"id": 12345, "status": "ok"}})
         raise AssertionError(f"unexpected request: {request.method} {request.url}")
 
-    db_path = str(tmp_path / "orderid.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        await _seed_one_approved_candidate(db, symbol="SPY", expiry="2026-05-29")
-        async with _make_client(handler) as c:
-            placed = await place_approved_candidates(db, c, "ACCT-X")
-        assert len(placed) == 1
+    await _seed_one_approved_candidate(conn, symbol="SPY", expiry="2026-05-29")
+    async with _make_client(handler) as c:
+        placed = await place_approved_candidates(conn, c, "ACCT-X")
+    assert len(placed) == 1
 
-        ic = await (await db.execute(
-            "SELECT order_id FROM ic_positions WHERE symbol='SPY'"
-        )).fetchone()
-        assert ic is not None
-        assert ic["order_id"] == "12345"
+    ic = await conn.fetchrow(
+        "SELECT order_id FROM ic_positions WHERE symbol='SPY'"
+    )
+    assert ic is not None
+    assert ic["order_id"] == "12345"

@@ -9,7 +9,7 @@ description = "Kotori (小鳥) — a portfolio companion for options traders run
 requires-python = ">=3.13"
 dependencies = [
     "textual>=0.89",
-    "aiosqlite>=0.20",
+    "asyncpg>=0.29",
     "httpx>=0.27",
     "apscheduler>=3.10",
     "anthropic>=0.30",

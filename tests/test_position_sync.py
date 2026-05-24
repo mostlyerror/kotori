@@ -1,8 +1,7 @@
-"""Tests for the Tradier -> SQLite position sync."""
+"""Tests for the Tradier -> Postgres position sync."""
 import httpx
 import pytest
 
-from kotorid.db import get_db, init_db
 from kotorid.position_sync import sync_positions
 from kotorid.tradier_client import build_client
 
@@ -31,7 +30,7 @@ def _handler_for(positions_payload, quotes_payload):
 
 
 @pytest.mark.asyncio
-async def test_sync_positions_writes_rows(tmp_path):
+async def test_sync_positions_writes_rows(conn):
     positions_payload = {
         "positions": {
             "position": [
@@ -61,19 +60,15 @@ async def test_sync_positions_writes_rows(tmp_path):
         }
     }
 
-    db_path = str(tmp_path / "sync.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        async with _make_client(_handler_for(positions_payload, quotes_payload)) as c:
-            count = await sync_positions(db, c, "ACCT-X")
-        assert count == 2
+    async with _make_client(_handler_for(positions_payload, quotes_payload)) as c:
+        count = await sync_positions(conn, c, "ACCT-X")
+    assert count == 2
 
-        cursor = await db.execute(
-            "SELECT symbol, quantity, avg_cost, current_price, market_value, "
-            "unrealized_pnl, unrealized_pnl_pct, instrument_type "
-            "FROM positions ORDER BY symbol"
-        )
-        rows = await cursor.fetchall()
+    rows = await conn.fetch(
+        "SELECT symbol, quantity, avg_cost, current_price, market_value, "
+        "unrealized_pnl, unrealized_pnl_pct, instrument_type "
+        "FROM positions ORDER BY symbol"
+    )
 
     by_symbol = {r["symbol"]: r for r in rows}
     assert set(by_symbol) == {"NVDA", "META"}
@@ -95,7 +90,7 @@ async def test_sync_positions_writes_rows(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_sync_positions_parses_occ_option(tmp_path):
+async def test_sync_positions_parses_occ_option(conn):
     positions_payload = {
         "positions": {
             "position": {
@@ -119,19 +114,15 @@ async def test_sync_positions_parses_occ_option(tmp_path):
         }
     }
 
-    db_path = str(tmp_path / "sync_opt.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        async with _make_client(_handler_for(positions_payload, quotes_payload)) as c:
-            count = await sync_positions(db, c, "ACCT-X")
-        assert count == 1
+    async with _make_client(_handler_for(positions_payload, quotes_payload)) as c:
+        count = await sync_positions(conn, c, "ACCT-X")
+    assert count == 1
 
-        cursor = await db.execute(
-            "SELECT symbol, instrument_type, underlying, expiry, strike, "
-            "put_call, quantity, avg_cost, market_value, unrealized_pnl "
-            "FROM positions"
-        )
-        row = await cursor.fetchone()
+    row = await conn.fetchrow(
+        "SELECT symbol, instrument_type, underlying, expiry, strike, "
+        "put_call, quantity, avg_cost, market_value, unrealized_pnl "
+        "FROM positions"
+    )
 
     assert row["symbol"] == "NVDA250516C00880000"
     assert row["instrument_type"] == "option"
@@ -149,7 +140,7 @@ async def test_sync_positions_parses_occ_option(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_sync_positions_replaces_existing_rows(tmp_path):
+async def test_sync_positions_replaces_existing_rows(conn):
     first_positions = {
         "positions": {
             "position": [
@@ -175,36 +166,28 @@ async def test_sync_positions_replaces_existing_rows(tmp_path):
         "quotes": {"quote": {"symbol": "AAPL", "last": 195.0}}
     }
 
-    db_path = str(tmp_path / "sync_replace.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        async with _make_client(_handler_for(first_positions, first_quotes)) as c:
-            await sync_positions(db, c, "ACCT-X")
-        cursor = await db.execute("SELECT symbol FROM positions ORDER BY symbol")
-        first_syms = [r["symbol"] for r in await cursor.fetchall()]
-        assert first_syms == ["META", "NVDA"]
+    async with _make_client(_handler_for(first_positions, first_quotes)) as c:
+        await sync_positions(conn, c, "ACCT-X")
+    rows = await conn.fetch("SELECT symbol FROM positions ORDER BY symbol")
+    first_syms = [r["symbol"] for r in rows]
+    assert first_syms == ["META", "NVDA"]
 
-        async with _make_client(_handler_for(second_positions, second_quotes)) as c:
-            count = await sync_positions(db, c, "ACCT-X")
-        assert count == 1
-        cursor = await db.execute("SELECT symbol FROM positions")
-        rows = await cursor.fetchall()
-        symbols = [r["symbol"] for r in rows]
+    async with _make_client(_handler_for(second_positions, second_quotes)) as c:
+        count = await sync_positions(conn, c, "ACCT-X")
+    assert count == 1
+    rows = await conn.fetch("SELECT symbol FROM positions")
+    symbols = [r["symbol"] for r in rows]
 
     assert symbols == ["AAPL"]
 
 
 @pytest.mark.asyncio
-async def test_sync_positions_handles_empty_account(tmp_path):
+async def test_sync_positions_handles_empty_account(conn):
     positions_payload = {"positions": "null"}
     quotes_payload = {"quotes": "null"}
 
-    db_path = str(tmp_path / "sync_empty.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        async with _make_client(_handler_for(positions_payload, quotes_payload)) as c:
-            count = await sync_positions(db, c, "ACCT-X")
-        assert count == 0
-        cursor = await db.execute("SELECT COUNT(*) FROM positions")
-        n = (await cursor.fetchone())[0]
+    async with _make_client(_handler_for(positions_payload, quotes_payload)) as c:
+        count = await sync_positions(conn, c, "ACCT-X")
+    assert count == 0
+    n = await conn.fetchval("SELECT COUNT(*) FROM positions")
     assert n == 0

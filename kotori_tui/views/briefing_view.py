@@ -1,6 +1,7 @@
 import json
 from datetime import date
 from textual.app import ComposeResult
+from textual.containers import Container
 from textual.widget import Widget
 from textual.widgets import Label, Markdown, Static
 from textual.binding import Binding
@@ -101,21 +102,26 @@ class BriefingView(Widget):
         Binding("enter", "open_detail", "Detail", show=True),
         Binding("a", "approve_candidate", "Approve", show=True),
         Binding("r", "reject_candidate", "Reject", show=True),
-        Binding("p", "open_strategy", "Strategy", show=True),
     ]
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._last_inbox_ids: list[int] = []
+        self._last_position_keys: list[str] = []
+        self._last_briefing: str = ""
+
     def compose(self) -> ComposeResult:
-        with Widget(classes="main-col"):
-            yield Widget(id="inbox-section")
+        with Container(classes="main-col"):
+            yield Container(id="inbox-section")
             yield Label("BRIEFING", classes="section-header")
             yield Markdown("_Loading briefing..._", id="briefing-md", classes="briefing-md")
-        with Widget(classes="sidebar"):
+        with Container(classes="sidebar"):
             yield Label("POSITIONS", classes="sidebar-title")
-            yield Widget(id="positions-list")
+            yield Container(id="positions-list")
 
     def on_mount(self) -> None:
         self.refresh_data()
-        self.set_interval(3, self.refresh_data)
+        self.set_interval(2, self.refresh_data)
 
     @work(exclusive=True)
     async def refresh_data(self) -> None:
@@ -136,19 +142,32 @@ class BriefingView(Widget):
             "ORDER BY p.symbol"
         )
 
-        await self._render_inbox(items)
-        self._render_briefing(briefing[0]["content"] if briefing else "_No briefing available._")
-        await self._render_positions(positions)
+        inbox_ids = [i["id"] for i in items]
+        if inbox_ids != self._last_inbox_ids:
+            self._last_inbox_ids = inbox_ids
+            await self._render_inbox(items)
+
+        briefing_content = briefing[0]["content"] if briefing else "_No briefing available._"
+        if briefing_content != self._last_briefing:
+            self._last_briefing = briefing_content
+            self._render_briefing(briefing_content)
+
+        pos_keys = [f"{p['symbol']}:{p['current_price']}:{p['unrealized_pnl_pct']}" for p in positions]
+        if pos_keys != self._last_position_keys:
+            self._last_position_keys = pos_keys
+            await self._render_positions(positions)
 
     async def _render_inbox(self, items: list) -> None:
         section = self.query_one("#inbox-section")
-        had_focus = isinstance(self.app.focused, InboxCard)
+        focused = self.app.focused
+        focused_id = focused.item["id"] if isinstance(focused, InboxCard) else None
         await section.remove_children()
 
         if not items:
             await section.mount(Label("✓  Inbox zero — portfolio running autonomously", classes="inbox-zero"))
             return
 
+        restore_card: InboxCard | None = None
         first_card: InboxCard | None = None
         for priority in PRIORITY_ORDER:
             group = [i for i in items if i["priority"] == priority]
@@ -160,8 +179,12 @@ class BriefingView(Widget):
                 await section.mount(card)
                 if first_card is None:
                     first_card = card
+                if item["id"] == focused_id:
+                    restore_card = card
 
-        if first_card is not None and not had_focus:
+        if restore_card is not None:
+            restore_card.focus()
+        elif first_card is not None and focused_id is None:
             first_card.focus()
 
     def _render_briefing(self, content: str) -> None:
@@ -215,8 +238,7 @@ class BriefingView(Widget):
         view refreshes. On API failure the candidate stays 'approved'
         for the cron to retry.
         """
-        import aiosqlite
-        from kotorid.config import DB_PATH, TRADIER_API_KEY
+        from kotorid.config import TRADIER_API_KEY
         from kotorid.db import get_db
         from kotorid.order_placement import place_approved_candidates
         from kotorid.tradier_client import build_client, get_account_id
@@ -226,33 +248,22 @@ class BriefingView(Widget):
             return
         symbol = card.item["symbol"]
 
-        # Mark the most recent pending candidate for this symbol as approved.
-        # Multiple-per-symbol-per-day is ruled out by candidate_scan dedupe;
-        # ORDER BY scan_date DESC is belt-and-suspenders in case a row slipped
-        # through under some other path.
         await db.execute(
             """UPDATE candidates SET order_status='approved'
                WHERE id = (
                    SELECT id FROM candidates
-                   WHERE symbol=? AND order_status='pending_approval'
+                   WHERE symbol=$1 AND order_status='pending_approval'
                    ORDER BY scan_date DESC LIMIT 1
                )""",
             (symbol,),
         )
 
-        # Place against the live broker right now (don't wait for the cron).
         async with build_client() as client:
             account_id = await get_account_id(client)
-            async with get_db(DB_PATH) as conn:
+            async with get_db() as conn:
                 await place_approved_candidates(conn, client, account_id)
 
-        # Trigger a refresh so the new IC + dismissed card flow into the view.
         self.refresh_data()
-
-    def action_open_strategy(self) -> None:
-        """Open the aggregate IC strategy performance view."""
-        from kotori_tui.screens.strategy_view import StrategyView
-        self.app.push_screen(StrategyView())
 
     @work(exclusive=True)
     async def action_reject_candidate(self) -> None:
@@ -268,14 +279,14 @@ class BriefingView(Widget):
             """UPDATE candidates SET order_status='rejected'
                WHERE id = (
                    SELECT id FROM candidates
-                   WHERE symbol=? AND order_status='pending_approval'
+                   WHERE symbol=$1 AND order_status='pending_approval'
                    ORDER BY scan_date DESC LIMIT 1
                )""",
             (symbol,),
         )
         await db.execute(
-            """UPDATE inbox_items SET dismissed_at=?
-               WHERE item_type='ic_candidate' AND symbol=? AND dismissed_at IS NULL""",
+            """UPDATE inbox_items SET dismissed_at=$1
+               WHERE item_type='ic_candidate' AND symbol=$2 AND dismissed_at IS NULL""",
             (now_iso, symbol),
         )
         self.refresh_data()

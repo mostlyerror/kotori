@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-import aiosqlite
+import asyncpg
 import httpx
 
 from kotorid.alerts_lib import create_alert
@@ -82,8 +82,8 @@ def _underlying_price(quote: dict | None) -> float | None:
 
 
 async def _maybe_fire_short_strike_threatened(
-    db: aiosqlite.Connection,
-    ic: aiosqlite.Row,
+    conn: asyncpg.Connection,
+    ic: asyncpg.Record,
     quotes: dict[str, dict],
     debit: float,
 ) -> None:
@@ -96,12 +96,11 @@ async def _maybe_fire_short_strike_threatened(
     """
     today_iso = date.today().isoformat()
 
-    warned_cur = await db.execute(
-        "SELECT short_strike_warned_at FROM ic_positions WHERE id=?",
-        (ic["id"],),
+    warned_val = await conn.fetchval(
+        "SELECT short_strike_warned_at FROM ic_positions WHERE id=$1",
+        ic["id"],
     )
-    warned_row = await warned_cur.fetchone()
-    if warned_row and warned_row[0] == today_iso:
+    if warned_val == today_iso:
         return
 
     underlying_price = _underlying_price(quotes.get(ic["symbol"]))
@@ -124,7 +123,7 @@ async def _maybe_fire_short_strike_threatened(
 
     distance_pct = (underlying_price - threatened_strike) / threatened_strike
     await create_alert(
-        db,
+        conn,
         alert_type="short_strike_threatened",
         symbol=ic["symbol"],
         headline=f"Short Strike Threatened — {ic['symbol']}",
@@ -141,14 +140,14 @@ async def _maybe_fire_short_strike_threatened(
             "current_debit": debit,
         },
     )
-    await db.execute(
-        "UPDATE ic_positions SET short_strike_warned_at=? WHERE id=?",
-        (today_iso, ic["id"]),
+    await conn.execute(
+        "UPDATE ic_positions SET short_strike_warned_at=$1 WHERE id=$2",
+        today_iso, ic["id"],
     )
 
 
 async def refresh_ic_state(
-    db: aiosqlite.Connection, client: httpx.AsyncClient
+    conn: asyncpg.Connection, client: httpx.AsyncClient
 ) -> int:
     """Update current_debit / pct_max_profit for every open IC.
 
@@ -156,12 +155,11 @@ async def refresh_ic_state(
     all 4 legs). ICs with any missing leg quote are skipped without
     error so a single bad symbol doesn't poison the whole pipeline.
     """
-    cursor = await db.execute(
+    ics = await conn.fetch(
         """SELECT id, symbol, expiry, short_call, long_call, short_put, long_put,
                   entry_credit, contracts
            FROM ic_positions WHERE exit_reason IS NULL"""
     )
-    ics = await cursor.fetchall()
     if not ics:
         return 0
 
@@ -207,14 +205,13 @@ async def refresh_ic_state(
         pct_max_profit = (
             (entry_credit - debit) / entry_credit if entry_credit else None
         )
-        await db.execute(
-            "UPDATE ic_positions SET current_debit=?, pct_max_profit=? WHERE id=?",
-            (debit, pct_max_profit, ic["id"]),
+        await conn.execute(
+            "UPDATE ic_positions SET current_debit=$1, pct_max_profit=$2 WHERE id=$3",
+            debit, pct_max_profit, ic["id"],
         )
         refreshed += 1
 
-        await _maybe_fire_short_strike_threatened(db, ic, quotes, debit)
+        await _maybe_fire_short_strike_threatened(conn, ic, quotes, debit)
 
-    await db.commit()
     log.info("refresh_ic_state: refreshed %d IC(s)", refreshed)
     return refreshed

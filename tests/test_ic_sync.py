@@ -5,7 +5,6 @@ import httpx
 import pytest
 
 from kotorid.alerts_lib import ALERT_FIELDS_KEY
-from kotorid.db import get_db, init_db
 from kotorid.ic_sync import refresh_ic_state
 from kotorid.tradier_client import build_client
 
@@ -20,7 +19,7 @@ def _make_client(handler):
 
 
 @pytest.mark.asyncio
-async def test_refresh_updates_debit_and_pct_max_profit(tmp_path):
+async def test_refresh_updates_debit_and_pct_max_profit(conn):
     """Open IC + full set of leg quotes => current_debit and pct_max_profit set."""
     def handler(request):
         if "/markets/quotes" in str(request.url):
@@ -34,25 +33,21 @@ async def test_refresh_updates_debit_and_pct_max_profit(tmp_path):
             })
         raise AssertionError(f"unexpected request: {request.url}")
 
-    db_path = str(tmp_path / "ic.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        await db.execute(
-            """INSERT INTO ic_positions
-               (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
-                spread_width, entry_credit, contracts, max_loss, regime_at_entry)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            ("SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
-             5.0, 1.00, 1, 400.0, "normal"),
-        )
-        await db.commit()
-        async with _make_client(handler) as c:
-            n = await refresh_ic_state(db, c)
-        assert n == 1
+    await conn.execute(
+        """INSERT INTO ic_positions
+           (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
+            spread_width, entry_credit, contracts, max_loss, regime_at_entry)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
+        "SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
+        5.0, 1.00, 1, 400.0, "normal",
+    )
+    async with _make_client(handler) as c:
+        n = await refresh_ic_state(conn, c)
+    assert n == 1
 
-        row = await (await db.execute(
-            "SELECT current_debit, pct_max_profit FROM ic_positions"
-        )).fetchone()
+    row = await conn.fetchrow(
+        "SELECT current_debit, pct_max_profit FROM ic_positions"
+    )
     # mid prices: SC=0.71, LC=0.25, SP=1.51, LP=0.99
     # debit = (0.71 + 1.51) - (0.25 + 0.99) = 2.22 - 1.24 = 0.98
     assert row["current_debit"] == pytest.approx(0.98)
@@ -61,7 +56,7 @@ async def test_refresh_updates_debit_and_pct_max_profit(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_refresh_skips_ic_when_a_leg_quote_is_missing(tmp_path):
+async def test_refresh_skips_ic_when_a_leg_quote_is_missing(conn):
     """Missing leg quote => skip this IC, no error, no partial update."""
     def handler(request):
         if "/markets/quotes" in str(request.url):
@@ -75,33 +70,29 @@ async def test_refresh_skips_ic_when_a_leg_quote_is_missing(tmp_path):
             })
         raise AssertionError(f"unexpected request: {request.url}")
 
-    db_path = str(tmp_path / "ic_missing.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        await db.execute(
-            """INSERT INTO ic_positions
-               (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
-                spread_width, entry_credit, contracts, max_loss, regime_at_entry,
-                current_debit, pct_max_profit)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            ("SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
-             5.0, 1.00, 1, 400.0, "normal", None, None),
-        )
-        await db.commit()
-        async with _make_client(handler) as c:
-            n = await refresh_ic_state(db, c)
-        assert n == 0
+    await conn.execute(
+        """INSERT INTO ic_positions
+           (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
+            spread_width, entry_credit, contracts, max_loss, regime_at_entry,
+            current_debit, pct_max_profit)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
+        "SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
+        5.0, 1.00, 1, 400.0, "normal", None, None,
+    )
+    async with _make_client(handler) as c:
+        n = await refresh_ic_state(conn, c)
+    assert n == 0
 
-        row = await (await db.execute(
-            "SELECT current_debit, pct_max_profit FROM ic_positions"
-        )).fetchone()
+    row = await conn.fetchrow(
+        "SELECT current_debit, pct_max_profit FROM ic_positions"
+    )
     # Should not have been touched.
     assert row["current_debit"] is None
     assert row["pct_max_profit"] is None
 
 
 @pytest.mark.asyncio
-async def test_refresh_skips_when_market_closed_returns_zero_quotes(tmp_path):
+async def test_refresh_skips_when_market_closed_returns_zero_quotes(conn):
     """Closed-market days: Tradier returns bid=0 ask=0 on legs.
 
     The IC must be skipped (not silently updated to debit=0, which would
@@ -119,32 +110,28 @@ async def test_refresh_skips_when_market_closed_returns_zero_quotes(tmp_path):
             })
         raise AssertionError(f"unexpected request: {request.url}")
 
-    db_path = str(tmp_path / "ic_closed_market.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        await db.execute(
-            """INSERT INTO ic_positions
-               (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
-                spread_width, entry_credit, contracts, max_loss, regime_at_entry,
-                current_debit)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            ("SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
-             5.0, 1.00, 1, 400.0, "normal", 1.04),
-        )
-        await db.commit()
-        async with _make_client(handler) as c:
-            n = await refresh_ic_state(db, c)
-        assert n == 0
+    await conn.execute(
+        """INSERT INTO ic_positions
+           (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
+            spread_width, entry_credit, contracts, max_loss, regime_at_entry,
+            current_debit)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
+        "SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
+        5.0, 1.00, 1, 400.0, "normal", 1.04,
+    )
+    async with _make_client(handler) as c:
+        n = await refresh_ic_state(conn, c)
+    assert n == 0
 
-        row = await (await db.execute(
-            "SELECT current_debit FROM ic_positions"
-        )).fetchone()
+    row = await conn.fetchrow(
+        "SELECT current_debit FROM ic_positions"
+    )
     # Last known debit preserved — not overwritten with garbage 0.
     assert row["current_debit"] == pytest.approx(1.04)
 
 
 @pytest.mark.asyncio
-async def test_refresh_skips_when_quote_is_crossed(tmp_path):
+async def test_refresh_skips_when_quote_is_crossed(conn):
     """Crossed quotes (bid > ask) are corrupt; skip rather than write nonsense."""
     def handler(request):
         if "/markets/quotes" in str(request.url):
@@ -159,25 +146,21 @@ async def test_refresh_skips_when_quote_is_crossed(tmp_path):
             })
         raise AssertionError(f"unexpected request: {request.url}")
 
-    db_path = str(tmp_path / "ic_crossed.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        await db.execute(
-            """INSERT INTO ic_positions
-               (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
-                spread_width, entry_credit, contracts, max_loss, regime_at_entry)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            ("SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
-             5.0, 1.00, 1, 400.0, "normal"),
-        )
-        await db.commit()
-        async with _make_client(handler) as c:
-            n = await refresh_ic_state(db, c)
-        assert n == 0
+    await conn.execute(
+        """INSERT INTO ic_positions
+           (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
+            spread_width, entry_credit, contracts, max_loss, regime_at_entry)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
+        "SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
+        5.0, 1.00, 1, 400.0, "normal",
+    )
+    async with _make_client(handler) as c:
+        n = await refresh_ic_state(conn, c)
+    assert n == 0
 
 
 @pytest.mark.asyncio
-async def test_refresh_accepts_zero_bid_with_real_ask(tmp_path):
+async def test_refresh_accepts_zero_bid_with_real_ask(conn):
     """Deep-OTM penny options legitimately have bid=0 ask=0.01.
 
     That's not closed-market garbage — it's a real "no resting bid"
@@ -195,51 +178,43 @@ async def test_refresh_accepts_zero_bid_with_real_ask(tmp_path):
             })
         raise AssertionError(f"unexpected request: {request.url}")
 
-    db_path = str(tmp_path / "ic_pennies.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        await db.execute(
-            """INSERT INTO ic_positions
-               (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
-                spread_width, entry_credit, contracts, max_loss, regime_at_entry)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            ("SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
-             5.0, 1.00, 1, 400.0, "normal"),
-        )
-        await db.commit()
-        async with _make_client(handler) as c:
-            n = await refresh_ic_state(db, c)
-        assert n == 1
+    await conn.execute(
+        """INSERT INTO ic_positions
+           (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
+            spread_width, entry_credit, contracts, max_loss, regime_at_entry)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
+        "SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
+        5.0, 1.00, 1, 400.0, "normal",
+    )
+    async with _make_client(handler) as c:
+        n = await refresh_ic_state(conn, c)
+    assert n == 1
 
-        row = await (await db.execute(
-            "SELECT current_debit FROM ic_positions"
-        )).fetchone()
-    # All legs at mid=0.005; shorts (2 × 0.005) − longs (2 × 0.005) = 0
+    row = await conn.fetchrow(
+        "SELECT current_debit FROM ic_positions"
+    )
+    # All legs at mid=0.005; shorts (2 x 0.005) - longs (2 x 0.005) = 0
     # This is a legitimate "IC at max profit" state — every leg worthless.
     assert row["current_debit"] == pytest.approx(0.0)
 
 
 @pytest.mark.asyncio
-async def test_refresh_skips_closed_ics(tmp_path):
+async def test_refresh_skips_closed_ics(conn):
     """ICs with exit_reason set should not be touched."""
     def handler(request):
         raise AssertionError("should not call Tradier when no open ICs")
 
-    db_path = str(tmp_path / "ic_closed.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        await db.execute(
-            """INSERT INTO ic_positions
-               (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
-                spread_width, entry_credit, contracts, max_loss, regime_at_entry,
-                exit_reason)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            ("SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
-             5.0, 1.00, 1, 400.0, "normal", "profit_target"),
-        )
-        await db.commit()
-        async with _make_client(handler) as c:
-            n = await refresh_ic_state(db, c)
+    await conn.execute(
+        """INSERT INTO ic_positions
+           (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
+            spread_width, entry_credit, contracts, max_loss, regime_at_entry,
+            exit_reason)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
+        "SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
+        5.0, 1.00, 1, 400.0, "normal", "profit_target",
+    )
+    async with _make_client(handler) as c:
+        n = await refresh_ic_state(conn, c)
     assert n == 0
 
 
@@ -263,30 +238,26 @@ def _quotes_handler_with_underlying(underlying_symbol: str, underlying_last: flo
 
 
 @pytest.mark.asyncio
-async def test_refresh_ic_state_fires_short_strike_threatened(tmp_path):
-    """Underlying within 1% of short_put → alert with structured fields."""
-    # Underlying SPY at $740, short_put=735, distance = (740-735)/735 ≈ 0.68%.
+async def test_refresh_ic_state_fires_short_strike_threatened(conn):
+    """Underlying within 1% of short_put -> alert with structured fields."""
+    # Underlying SPY at $740, short_put=735, distance = (740-735)/735 ~ 0.68%.
     handler = _quotes_handler_with_underlying("SPY", 740.0)
 
-    db_path = str(tmp_path / "ic_threatened.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        await db.execute(
-            """INSERT INTO ic_positions
-               (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
-                spread_width, entry_credit, contracts, max_loss, regime_at_entry)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            ("SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
-             5.0, 1.00, 1, 400.0, "normal"),
-        )
-        await db.commit()
-        async with _make_client(handler) as c:
-            n = await refresh_ic_state(db, c)
-        assert n == 1
+    await conn.execute(
+        """INSERT INTO ic_positions
+           (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
+            spread_width, entry_credit, contracts, max_loss, regime_at_entry)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
+        "SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
+        5.0, 1.00, 1, 400.0, "normal",
+    )
+    async with _make_client(handler) as c:
+        n = await refresh_ic_state(conn, c)
+    assert n == 1
 
-        rows = await (await db.execute(
-            "SELECT alert_type, symbol, message FROM alerts"
-        )).fetchall()
+    rows = await conn.fetch(
+        "SELECT alert_type, symbol, message FROM alerts"
+    )
     assert len(rows) == 1
     row = rows[0]
     assert row["alert_type"] == "short_strike_threatened"
@@ -302,54 +273,46 @@ async def test_refresh_ic_state_fires_short_strike_threatened(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_refresh_ic_state_dedup_short_strike_same_day(tmp_path):
-    """Two refreshes same day → only one short_strike_threatened alert."""
+async def test_refresh_ic_state_dedup_short_strike_same_day(conn):
+    """Two refreshes same day -> only one short_strike_threatened alert."""
     handler = _quotes_handler_with_underlying("SPY", 740.0)
 
-    db_path = str(tmp_path / "ic_threatened_dedup.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        await db.execute(
-            """INSERT INTO ic_positions
-               (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
-                spread_width, entry_credit, contracts, max_loss, regime_at_entry)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            ("SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
-             5.0, 1.00, 1, 400.0, "normal"),
-        )
-        await db.commit()
-        async with _make_client(handler) as c:
-            await refresh_ic_state(db, c)
-            await refresh_ic_state(db, c)
+    await conn.execute(
+        """INSERT INTO ic_positions
+           (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
+            spread_width, entry_credit, contracts, max_loss, regime_at_entry)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
+        "SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
+        5.0, 1.00, 1, 400.0, "normal",
+    )
+    async with _make_client(handler) as c:
+        await refresh_ic_state(conn, c)
+        await refresh_ic_state(conn, c)
 
-        rows = await (await db.execute(
-            "SELECT alert_type FROM alerts WHERE alert_type='short_strike_threatened'"
-        )).fetchall()
+    rows = await conn.fetch(
+        "SELECT alert_type FROM alerts WHERE alert_type='short_strike_threatened'"
+    )
     assert len(rows) == 1
 
 
 @pytest.mark.asyncio
-async def test_refresh_ic_state_no_alert_when_underlying_far_from_strikes(tmp_path):
-    """Underlying comfortably between strikes → no alert."""
+async def test_refresh_ic_state_no_alert_when_underlying_far_from_strikes(conn):
+    """Underlying comfortably between strikes -> no alert."""
     # SPY at $748, short_put=735 (distance 1.77%), short_call=760 (distance 1.58%).
     handler = _quotes_handler_with_underlying("SPY", 748.0)
 
-    db_path = str(tmp_path / "ic_safe.db")
-    async with get_db(db_path) as db:
-        await init_db(db)
-        await db.execute(
-            """INSERT INTO ic_positions
-               (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
-                spread_width, entry_credit, contracts, max_loss, regime_at_entry)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            ("SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
-             5.0, 1.00, 1, 400.0, "normal"),
-        )
-        await db.commit()
-        async with _make_client(handler) as c:
-            await refresh_ic_state(db, c)
+    await conn.execute(
+        """INSERT INTO ic_positions
+           (symbol, entry_date, expiry, short_call, long_call, short_put, long_put,
+            spread_width, entry_credit, contracts, max_loss, regime_at_entry)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
+        "SPY", "2026-05-22", "2026-05-29", 760.0, 765.0, 735.0, 730.0,
+        5.0, 1.00, 1, 400.0, "normal",
+    )
+    async with _make_client(handler) as c:
+        await refresh_ic_state(conn, c)
 
-        rows = await (await db.execute(
-            "SELECT alert_type FROM alerts"
-        )).fetchall()
+    rows = await conn.fetch(
+        "SELECT alert_type FROM alerts"
+    )
     assert len(rows) == 0

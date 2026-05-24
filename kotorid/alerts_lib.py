@@ -21,13 +21,13 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-import aiosqlite
+import asyncpg
 
 ALERT_FIELDS_KEY = "\n---KOTORI_STRUCTURED---\n"
 
 
 async def create_alert(
-    db: aiosqlite.Connection,
+    conn: asyncpg.Connection,
     *,
     alert_type: str,
     symbol: str,
@@ -38,9 +38,7 @@ async def create_alert(
 ) -> int:
     """Insert one row into the alerts table; return its id.
 
-    Caller is responsible for ``db.commit()``. We don't commit here so
-    multi-alert flows (e.g., a single job that emits several alerts) can
-    batch.
+    asyncpg auto-commits each statement, so no explicit commit needed.
     """
     body_lines = body_lines or []
     now = triggered_at or datetime.now(tz=timezone.utc).isoformat()
@@ -52,12 +50,12 @@ async def create_alert(
     else:
         message = headline
 
-    cursor = await db.execute(
+    aid = await conn.fetchval(
         "INSERT INTO alerts (symbol, alert_type, message, triggered_at) "
-        "VALUES (?,?,?,?)",
-        (symbol, alert_type, message, now),
+        "VALUES ($1,$2,$3,$4) RETURNING id",
+        symbol, alert_type, message, now,
     )
-    return cursor.lastrowid
+    return aid
 
 
 def parse_alert_message(message: str) -> tuple[str, dict[str, Any]]:
