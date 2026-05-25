@@ -9,3 +9,7 @@ class DataProvider(ABC):
 
     @abstractmethod
     def get_signal_data(self, signal_name: str, as_of: date) -> float | None: ...
+
+    def days_until_earnings(self, symbol: str, as_of: date) -> int | None:
+        """Days until next earnings for symbol. Returns None if unknown."""
+        return None

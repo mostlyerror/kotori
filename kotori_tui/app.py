@@ -6,6 +6,7 @@ from kotori_tui.widgets.status_bar import StatusBar
 class KotoriApp(App):
     TITLE = "🐦 kotori"
     BINDINGS = [
+        Binding("e", "open_earnings", "Earnings", show=True),
         Binding("p", "open_strategy", "Strategy", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
@@ -18,6 +19,10 @@ class KotoriApp(App):
         from kotori_tui.views.briefing_view import BriefingView
         yield BriefingView(id="briefing")
         yield StatusBar()
+
+    def action_open_earnings(self) -> None:
+        from kotori_tui.screens.earnings_view import EarningsView
+        self.push_screen(EarningsView())
 
     def action_open_strategy(self) -> None:
         from kotori_tui.screens.strategy_view import StrategyView

@@ -9,6 +9,7 @@ class ParquetProvider(DataProvider):
         self.daily_dir = Path(daily_dir)
         self._options_cache: dict[str, pl.DataFrame] = {}
         self._signal_cache: dict[str, pl.DataFrame] = {}
+        self._earnings_cache: dict[str, list[date]] = {}
 
     def _load_options(self, symbol: str) -> pl.DataFrame:
         if symbol not in self._options_cache:
@@ -38,3 +39,26 @@ class ParquetProvider(DataProvider):
         if len(row) == 0:
             return None
         return row["value"][0]
+
+    def _load_earnings(self, symbol: str) -> list[date]:
+        if symbol not in self._earnings_cache:
+            path = self.daily_dir / "events" / "earnings.parquet"
+            if not path.exists():
+                self._earnings_cache[symbol] = []
+                return []
+            df = pl.read_parquet(path)
+            sym_dates = df.filter(pl.col("symbol") == symbol).sort("earnings_date")
+            self._earnings_cache[symbol] = [
+                d if isinstance(d, date) else d.date()
+                for d in sym_dates["earnings_date"].to_list()
+            ]
+        return self._earnings_cache[symbol]
+
+    def days_until_earnings(self, symbol: str, as_of: date) -> int | None:
+        dates = self._load_earnings(symbol)
+        if not dates:
+            return None
+        for d in dates:
+            if d >= as_of:
+                return (d - as_of).days
+        return None

@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from datetime import datetime
 
 DEFAULT_WEIGHTS: dict[str, dict[str, float]] = {
-    "normal": {"vix_regime": 0.30, "iv_rank": 0.25},
-    "caution": {"vix_regime": 0.50, "iv_rank": 0.15},
-    "crisis": {"vix_regime": 0.70, "iv_rank": 0.05},
+    "normal": {"vix_regime": 0.30, "hy_spread": 0.25, "yield_curve": 0.20, "iv_rank": 0.25},
+    "caution": {"vix_regime": 0.40, "hy_spread": 0.30, "yield_curve": 0.20, "iv_rank": 0.10},
+    "crisis": {"vix_regime": 0.50, "hy_spread": 0.30, "yield_curve": 0.15, "iv_rank": 0.05},
 }
 
 @dataclass

@@ -1,5 +1,22 @@
 from kotorid.signals.mesh import SignalMesh
 
+# --- Hard gates: return True to BLOCK entry ---
+
+VIX_GATE = 45.0
+HY_SPREAD_GATE = 6.0
+
+
+def should_hard_gate(vix: float | None, hy_spread: float | None) -> bool:
+    """True if conditions are too extreme to sell premium."""
+    if vix is not None and vix >= VIX_GATE:
+        return True
+    if hy_spread is not None and hy_spread >= HY_SPREAD_GATE:
+        return True
+    return False
+
+
+# --- Soft signals: feed into mesh for composite scoring ---
+
 def update_vix_regime(mesh: SignalMesh, vix: float, timestamp) -> str:
     if vix >= 45.0:
         regime = "crisis"
@@ -15,3 +32,35 @@ def update_vix_regime(mesh: SignalMesh, vix: float, timestamp) -> str:
         value = 1.0
     mesh.update("vix_regime", value, half_life_days=5.0, timestamp=timestamp)
     return regime
+
+
+def update_hy_spread(mesh: SignalMesh, hy_spread: float, timestamp) -> None:
+    """High-yield spread: wider = more credit stress = worse for selling premium.
+
+    OAS below 3.5% is benign, 3.5-5% is caution, above 5% is danger.
+    """
+    if hy_spread < 3.5:
+        value = 1.0
+    elif hy_spread < 4.5:
+        value = 0.3
+    elif hy_spread < 5.0:
+        value = -0.3
+    else:
+        value = -0.8
+    mesh.update("hy_spread", value, half_life_days=10.0, timestamp=timestamp)
+
+
+def update_yield_curve(mesh: SignalMesh, spread_10y2y: float, timestamp) -> None:
+    """10Y-2Y yield curve: inverted = recession signal = risk-off.
+
+    Positive and steepening is constructive. Negative is a warning.
+    """
+    if spread_10y2y > 0.5:
+        value = 0.8
+    elif spread_10y2y > 0.0:
+        value = 0.3
+    elif spread_10y2y > -0.5:
+        value = -0.3
+    else:
+        value = -0.8
+    mesh.update("yield_curve", value, half_life_days=20.0, timestamp=timestamp)

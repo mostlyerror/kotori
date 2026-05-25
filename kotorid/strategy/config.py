@@ -10,3 +10,6 @@ class ICConfig:
     min_credit_ratio: float = 0.20
     profit_target: float = 0.50
     stop_loss: float = 2.00
+    # Fixed-percentage OTM strike selection (for backtesting without Greeks)
+    use_fixed_otm: bool = False
+    short_otm_pct: float = 0.05  # 5% OTM for short strikes

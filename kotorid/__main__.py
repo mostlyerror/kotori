@@ -12,9 +12,11 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
 
-from kotorid.candidate_scan import scan_candidates
+from kotorid.candidate_scan import scan_candidates, get_watchlist
+from kotorid.earnings import refresh_earnings
 from kotorid.config import DATABASE_URL, TRADIER_API_KEY
 from kotorid.db import get_db, init_db, create_pool, close_pool
+from kotorid.market_calendar import is_market_open
 from kotorid.ic_sync import refresh_ic_state
 from kotorid.mock_data import seed_mock_data
 from kotorid.notify import notify_pending_alerts, webhook_url
@@ -54,10 +56,16 @@ async def ensure_db():
                 "ensure_db: TRADIER_API_KEY not set and KOTORI_SEED_MOCK not set "
                 "— starting empty (set KOTORI_SEED_MOCK=1 to populate demo data)"
             )
+        try:
+            await refresh_earnings(conn, get_watchlist())
+        except Exception:
+            log.exception("ensure_db: earnings refresh failed; continuing")
         log.info("DB ready (Postgres)")
 
 
 async def _scheduled_position_sync():
+    if not is_market_open():
+        return
     try:
         async with get_db() as conn:
             async with build_client() as client:
@@ -68,6 +76,8 @@ async def _scheduled_position_sync():
 
 
 async def _scheduled_ic_refresh():
+    if not is_market_open():
+        return
     try:
         async with get_db() as conn:
             async with build_client() as client:
@@ -76,7 +86,18 @@ async def _scheduled_ic_refresh():
         log.exception("scheduled ic_refresh failed")
 
 
+async def _scheduled_earnings_refresh():
+    try:
+        async with get_db() as conn:
+            await refresh_earnings(conn, get_watchlist())
+    except Exception:
+        log.exception("scheduled earnings_refresh failed")
+
+
 async def _scheduled_candidate_scan():
+    if not is_market_open():
+        log.debug("candidate_scan: market closed, skipping")
+        return
     try:
         async with get_db() as conn:
             async with build_client() as client:
@@ -111,6 +132,9 @@ async def _scheduled_briefing():
 
 
 async def _scheduled_heartbeat():
+    if not is_market_open():
+        log.debug("heartbeat: market closed, skipping")
+        return
     from kotorid.heartbeat import build_heartbeat_line, post_heartbeat
     from datetime import datetime
     url = webhook_url()
@@ -155,6 +179,11 @@ async def run():
 
     scheduler.add_job(
         jobs.gap_monitor, CronTrigger(hour=8, minute=0, timezone=CT), id="gap_monitor"
+    )
+    scheduler.add_job(
+        _scheduled_earnings_refresh,
+        CronTrigger(day_of_week="mon-fri", hour=6, minute=0, timezone=CT),
+        id="earnings_refresh",
     )
     scheduler.add_job(
         _scheduled_briefing,

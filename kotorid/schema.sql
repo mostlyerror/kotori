@@ -160,3 +160,14 @@ CREATE TABLE IF NOT EXISTS briefings (
     content TEXT NOT NULL,
     generated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS earnings_calendar (
+    symbol TEXT NOT NULL,
+    earnings_date DATE NOT NULL,
+    eps_estimate DOUBLE PRECISION,
+    reported_eps DOUBLE PRECISION,
+    surprise_pct DOUBLE PRECISION,
+    is_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (symbol, earnings_date)
+);

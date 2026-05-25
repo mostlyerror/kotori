@@ -25,10 +25,15 @@ import asyncpg
 import httpx
 
 from kotorid.alerts_lib import create_alert
+from kotorid.earnings import is_etf, symbols_in_earnings_window
 
 log = logging.getLogger(__name__)
 
-DEFAULT_WATCHLIST = ["SPY", "QQQ", "IWM", "AAPL", "NVDA", "TSLA", "MSFT", "AMZN", "META", "GOOGL"]
+DEFAULT_WATCHLIST = [
+    "SPY", "QQQ", "IWM",
+    "AAPL", "NVDA", "TSLA", "MSFT", "AMZN", "META", "GOOGL",
+    "AMD", "NFLX", "CRM", "JPM", "XOM", "UNH", "DIS", "BA",
+]
 TARGET_SHORT_DELTA = 0.16  # ~84% probability of OTM at expiry
 WING_WIDTH = 5             # dollars between short and long strike on each wing
 MIN_DTE = 5
@@ -138,8 +143,13 @@ async def _get_spot(client: httpx.AsyncClient, symbol: str) -> float | None:
 
 async def scan_one_symbol(
     conn: asyncpg.Connection, client: httpx.AsyncClient, symbol: str,
+    *, tier: str = "earnings",
 ) -> dict | None:
-    """Scan a single symbol; return the candidate dict if one was written."""
+    """Scan a single symbol; return the candidate dict if one was written.
+
+    tier controls sizing: "earnings" = full size (1 contract),
+    "vrp" = half size (1 contract but flagged for reduced allocation).
+    """
     today_iso = date.today().isoformat()
 
     existing = await conn.fetchrow(
@@ -242,6 +252,7 @@ async def scan_one_symbol(
         "short_put": legs["short_put"]["strike"], "long_put": legs["long_put"]["strike"],
         "credit": round(credit, 2), "max_loss": round(max_loss, 2),
         "agent_run_id": agent_run_id, "candidate_id": candidate_id,
+        "tier": tier,
     }
 
 
@@ -249,27 +260,52 @@ async def scan_candidates(
     conn: asyncpg.Connection, client: httpx.AsyncClient,
     symbols: list[str] | None = None,
 ) -> list[dict]:
-    """Run scan_one_symbol for every symbol in the watchlist.
+    """Scan watchlist with earnings-aware tiering.
 
-    Returns the list of candidate dicts that were actually written.
-    Symbols that fail any filter (no expiry, no chain data, weak credit,
-    duplicate-today) are skipped silently with a log line.
+    Tier 1 (earnings): individual stocks with earnings in [3, 14] days.
+    Tier 2 (vrp): ETFs — only scanned if no Tier 1 candidates found.
+    Individual stocks outside the earnings window are skipped entirely.
     """
     syms = symbols if symbols is not None else get_watchlist()
+
+    etf_syms = [s for s in syms if is_etf(s)]
+    stock_syms = [s for s in syms if not is_etf(s)]
+
+    earnings_hits = await symbols_in_earnings_window(conn, stock_syms)
+    earnings_syms = {e.symbol for e in earnings_hits}
+
+    skipped = [s for s in stock_syms if s not in earnings_syms]
+    if skipped:
+        log.info("candidate_scan: skipping %d stock(s) outside earnings window: %s",
+                 len(skipped), ", ".join(skipped))
+
     written: list[dict] = []
-    for sym in syms:
+    for sym in earnings_syms:
         try:
-            result = await scan_one_symbol(conn, client, sym)
+            result = await scan_one_symbol(conn, client, sym, tier="earnings")
         except Exception:
             log.exception("candidate_scan: error scanning %s", sym)
             continue
         if result:
             written.append(result)
+
+    if not written and etf_syms:
+        log.info("candidate_scan: no earnings plays found, scanning ETFs for VRP")
+        for sym in etf_syms:
+            try:
+                result = await scan_one_symbol(conn, client, sym, tier="vrp")
+            except Exception:
+                log.exception("candidate_scan: error scanning %s", sym)
+                continue
+            if result:
+                written.append(result)
+
     if written:
         top = max(written, key=lambda c: c["credit"] / (c["max_loss"] / 100))
+        tier_label = "🎯 Earnings" if top["tier"] == "earnings" else "📊 VRP"
         body_lines = [
             f"{len(written)} candidate(s) ready for approval.",
-            f"Top pick: {top['symbol']} {top['expiry']} — "
+            f"{tier_label}: {top['symbol']} {top['expiry']} — "
             f"credit ${top['credit']:.2f}, max loss ${top['max_loss']:.0f}.",
             f"Strikes: SC{int(top['short_call'])}/LC{int(top['long_call'])} "
             f"SP{int(top['short_put'])}/LP{int(top['long_put'])}.",
@@ -286,7 +322,11 @@ async def scan_candidates(
                 "symbols": [c["symbol"] for c in written],
                 "credit": top["credit"],
                 "max_loss": top["max_loss"],
+                "tier": top["tier"],
             },
         )
-    log.info("candidate_scan: wrote %d candidate(s) from %d symbols", len(written), len(syms))
+    log.info("candidate_scan: wrote %d candidate(s) (tier 1: %d earnings, tier 2: %d vrp)",
+             len(written),
+             sum(1 for c in written if c["tier"] == "earnings"),
+             sum(1 for c in written if c["tier"] == "vrp"))
     return written
