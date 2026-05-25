@@ -6,37 +6,28 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from kotorid.config import DATABASE_URL, TRADIER_API_KEY
-from kotorid.db import get_db, init_db, create_pool, close_pool
-from kotorid.mock_data import seed_mock_data
-from kotorid.position_sync import sync_positions
-from kotorid.tradier_client import build_client, get_account_id
+import asyncpg
+from kotorid.config import DATABASE_URL
+from kotorid.db import init_db
 
 log = logging.getLogger(__name__)
 
 
-async def ensure_db():
-    await create_pool(DATABASE_URL)
-    async with get_db() as conn:
+async def ensure_schema():
+    """Init schema using a one-shot connection (not a pool).
+
+    The TUI's db module creates its own pool lazily inside Textual's
+    event loop — we can't share a pool across asyncio.run() boundaries.
+    """
+    conn = await asyncpg.connect(DATABASE_URL)
+    try:
         await init_db(conn)
-        if TRADIER_API_KEY:
-            try:
-                async with build_client() as client:
-                    account_id = await get_account_id(client)
-                    count = await sync_positions(conn, client, account_id)
-                log.info(
-                    "ensure_db: synced %d positions from Tradier (account=%s)",
-                    count,
-                    account_id,
-                )
-            except Exception:
-                log.exception("ensure_db: Tradier sync failed; continuing")
-        elif os.environ.get("KOTORI_SEED_MOCK"):
-            await seed_mock_data(conn)
+    finally:
+        await conn.close()
 
 
 def main():
-    asyncio.run(ensure_db())
+    asyncio.run(ensure_schema())
     from kotori_tui.app import KotoriApp
     KotoriApp().run()
 
