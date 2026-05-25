@@ -10,6 +10,7 @@ class ParquetProvider(DataProvider):
         self._options_cache: dict[str, pl.DataFrame] = {}
         self._signal_cache: dict[str, pl.DataFrame] = {}
         self._earnings_cache: dict[str, list[date]] = {}
+        self._earnings_detail: pl.DataFrame | None = None
 
     def _load_options(self, symbol: str) -> pl.DataFrame:
         if symbol not in self._options_cache:
@@ -62,3 +63,28 @@ class ParquetProvider(DataProvider):
             if d >= as_of:
                 return (d - as_of).days
         return None
+
+    def _load_earnings_detail(self) -> pl.DataFrame:
+        if self._earnings_detail is None:
+            path = self.daily_dir / "events" / "earnings.parquet"
+            if path.exists():
+                self._earnings_detail = pl.read_parquet(path)
+            else:
+                self._earnings_detail = pl.DataFrame({
+                    "symbol": [], "earnings_date": [],
+                    "surprise_pct": [], "reported_eps": [],
+                })
+        return self._earnings_detail
+
+    def last_earnings_surprise(self, symbol: str, as_of: date) -> tuple[float, int] | None:
+        df = self._load_earnings_detail()
+        past = df.filter(
+            (pl.col("symbol") == symbol)
+            & (pl.col("earnings_date") < as_of)
+            & (pl.col("surprise_pct").is_not_null())
+        ).sort("earnings_date", descending=True)
+        if len(past) == 0:
+            return None
+        row = past.row(0, named=True)
+        days_since = (as_of - row["earnings_date"]).days
+        return (row["surprise_pct"], days_since)

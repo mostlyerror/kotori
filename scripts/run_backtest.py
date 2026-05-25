@@ -26,6 +26,7 @@ from kotorid.signals.mesh import SignalMesh
 from kotorid.signals.regime import (
     should_hard_gate,
     update_hy_spread,
+    update_pead,
     update_vix_regime,
     update_yield_curve,
 )
@@ -120,15 +121,6 @@ def run_backtest(
                          today, vix or 0, hy_spread or 0)
                 continue
 
-            # Soft gate: mesh composite score must be positive
-            if allocator and mesh and not allocator.should_trade(mesh, timestamp, current_regime):
-                continue
-
-            # Position scale from mesh (0.5x-1.0x when signals active)
-            scale = 1.0
-            if allocator and mesh:
-                scale = allocator.position_scale(mesh, timestamp, current_regime)
-
             # Earnings-aware tiering: only scan stocks in the earnings window
             if use_earnings:
                 stock_syms = [s for s in symbols if not is_etf(s)]
@@ -143,6 +135,19 @@ def run_backtest(
                 scan_list = symbols
 
             for symbol in scan_list:
+                # Per-symbol PEAD signal update
+                if mesh is not None:
+                    pead_data = provider.last_earnings_surprise(symbol, today)
+                    if pead_data:
+                        update_pead(mesh, pead_data[0], pead_data[1], timestamp)
+
+                # Mesh gate + sizing (evaluated per-symbol now that PEAD is loaded)
+                if allocator and mesh and not allocator.should_trade(mesh, timestamp, current_regime):
+                    continue
+                scale = 1.0
+                if allocator and mesh:
+                    scale = allocator.position_scale(mesh, timestamp, current_regime)
+
                 chain = provider.get_chain(symbol, today, cfg.min_dte, cfg.max_dte)
                 if len(chain) == 0:
                     continue
@@ -160,8 +165,9 @@ def run_backtest(
                     candidate, timestamp,
                 )
                 portfolio.cash -= CostConfig().commission_per_contract * 4
-                log.info("%s: opened %s [%s] credit=$%.2f scale=%.2f",
-                         today, pos_key, tier, candidate["credit"], scale)
+                log.info("%s: opened %s [%s] credit=$%.2f scale=%.2f pead=%s",
+                         today, pos_key, tier, candidate["credit"], scale,
+                         f"{pead_data[0]:+.1f}%/{pead_data[1]}d" if mesh and pead_data else "n/a")
 
         # Record equity at 15:45
         if state == MarketState.MARKET_OPEN and timestamp.hour == 15 and timestamp.minute == 45:

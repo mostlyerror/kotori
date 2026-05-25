@@ -5,6 +5,7 @@ from kotorid.signals.mesh import SignalMesh
 from kotorid.signals.regime import (
     should_hard_gate,
     update_hy_spread,
+    update_pead,
     update_vix_regime,
     update_yield_curve,
 )
@@ -78,3 +79,35 @@ def test_full_mesh_mixed_signals():
     update_yield_curve(mesh, -0.3, ts)  # bearish
     score = mesh.composite_score(ts, "normal")
     assert -0.5 < score < 0.5  # mixed signals = near zero
+
+
+def test_pead_small_surprise_is_positive():
+    mesh = SignalMesh()
+    ts = datetime(2024, 6, 1)
+    update_pead(mesh, 1.5, days_since=10, timestamp=ts)
+    score = mesh.composite_score(ts, "normal")
+    assert score > 0  # small surprise = rangebound = good for IC
+
+
+def test_pead_large_surprise_is_negative():
+    mesh = SignalMesh()
+    ts = datetime(2024, 6, 1)
+    update_pead(mesh, 12.0, days_since=5, timestamp=ts)
+    score = mesh.composite_score(ts, "normal")
+    assert score < 0  # huge surprise = trending = bad for IC
+
+
+def test_pead_old_surprise_ignored():
+    mesh = SignalMesh()
+    ts = datetime(2024, 6, 1)
+    update_pead(mesh, 15.0, days_since=65, timestamp=ts)
+    score = mesh.composite_score(ts, "normal")
+    assert score == 0.0  # >60 days, PEAD has faded
+
+
+def test_pead_negative_surprise_also_penalizes():
+    mesh = SignalMesh()
+    ts = datetime(2024, 6, 1)
+    update_pead(mesh, -8.0, days_since=7, timestamp=ts)
+    score = mesh.composite_score(ts, "normal")
+    assert score < 0  # big miss = trending down = still bad for symmetric IC

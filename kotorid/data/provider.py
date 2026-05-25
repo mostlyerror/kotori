@@ -13,3 +13,10 @@ class DataProvider(ABC):
     def days_until_earnings(self, symbol: str, as_of: date) -> int | None:
         """Days until next earnings for symbol. Returns None if unknown."""
         return None
+
+    def last_earnings_surprise(self, symbol: str, as_of: date) -> tuple[float, int] | None:
+        """Most recent past earnings surprise for symbol.
+
+        Returns (surprise_pct, days_since) or None if no past earnings.
+        """
+        return None

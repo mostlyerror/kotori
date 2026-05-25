@@ -50,8 +50,6 @@ async def build_heartbeat_line(
     )
     if today_candidates > 0:
         parts.append(f"scan: {today_candidates} candidate(s) today")
-    else:
-        parts.append("scan: 0 candidates today")
 
     return " · ".join(parts)
 

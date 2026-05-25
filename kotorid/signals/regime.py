@@ -64,3 +64,32 @@ def update_yield_curve(mesh: SignalMesh, spread_10y2y: float, timestamp) -> None
     else:
         value = -0.8
     mesh.update("yield_curve", value, half_life_days=20.0, timestamp=timestamp)
+
+
+def update_pead(
+    mesh: SignalMesh, surprise_pct: float, days_since: int, timestamp,
+) -> None:
+    """Post-earnings announcement drift signal.
+
+    Strong recent surprise → stock is trending → bad for symmetric ICs.
+    Weak/old surprise → stock absorbed the move → rangebound, good for ICs.
+
+    Signal is NEGATIVE for large surprises (trending = IC risk) and
+    POSITIVE when surprise is small or old (rangebound = IC opportunity).
+    """
+    if days_since > 60:
+        return  # too old, PEAD has faded
+
+    magnitude = abs(surprise_pct)
+
+    if magnitude < 2.0:
+        value = 0.8   # tiny surprise, stock stays rangebound
+    elif magnitude < 5.0:
+        value = 0.3   # moderate surprise, some drift but manageable
+    elif magnitude < 10.0:
+        value = -0.3  # big surprise, stock likely trending
+    else:
+        value = -0.8  # huge surprise, strong directional drift
+
+    remaining_life = max(1.0, 60.0 - days_since)
+    mesh.update("pead", value, half_life_days=remaining_life / 4, timestamp=timestamp)
