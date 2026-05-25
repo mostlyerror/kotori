@@ -1,0 +1,11 @@
+from __future__ import annotations
+from abc import ABC, abstractmethod
+from datetime import date
+import polars as pl
+
+class DataProvider(ABC):
+    @abstractmethod
+    def get_chain(self, underlying: str, as_of: date, min_dte: int, max_dte: int) -> pl.DataFrame: ...
+
+    @abstractmethod
+    def get_signal_data(self, signal_name: str, as_of: date) -> float | None: ...
